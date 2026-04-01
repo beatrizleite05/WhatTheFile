@@ -717,13 +717,15 @@ mod tests {
             files_updated: 1, files_moved: 1, files_deleted: 0, error_count: 0,
         };
         complete_job(&conn, job_id, &counts, now).unwrap();
-        let (status, added): (String, i64) = conn.query_row(
-            "SELECT status, files_added FROM index_jobs WHERE id = ?1",
+        let (status, added, phase, completed_at): (String, i64, Option<String>, Option<i64>) = conn.query_row(
+            "SELECT status, files_added, phase, completed_at FROM index_jobs WHERE id = ?1",
             params![job_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         ).unwrap();
         assert_eq!(status, "completed");
         assert_eq!(added, 8);
+        assert!(phase.is_none(), "phase should be NULL after completion");
+        assert!(completed_at.is_some(), "completed_at should be set after completion");
     }
 
     #[test]
@@ -739,6 +741,38 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(phase, "fingerprinting");
+    }
+
+    #[test]
+    fn test_update_job_counts() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let job_id = insert_job(&conn, root.id, 1, now).unwrap();
+        let counts = JobCounts {
+            files_total: 50, files_done: 20, files_added: 15,
+            files_updated: 3, files_moved: 2, files_deleted: 0, error_count: 1,
+        };
+        update_job_counts(&conn, job_id, &counts, now).unwrap();
+        let (total, done, added, updated, moved, errors): (i64, i64, i64, i64, i64, i64) = conn.query_row(
+            "SELECT files_total, files_done, files_added, files_updated, files_moved, error_count
+             FROM index_jobs WHERE id = ?1",
+            params![job_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        ).unwrap();
+        assert_eq!(total, 50);
+        assert_eq!(done, 20);
+        assert_eq!(added, 15);
+        assert_eq!(updated, 3);
+        assert_eq!(moved, 2);
+        assert_eq!(errors, 1);
+        // Job must still be 'running' (update_job_counts does not complete the job)
+        let status: String = conn.query_row(
+            "SELECT status FROM index_jobs WHERE id = ?1",
+            params![job_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(status, "running");
     }
 
     #[test]
