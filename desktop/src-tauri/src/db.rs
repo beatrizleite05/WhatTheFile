@@ -390,11 +390,92 @@ pub fn sweep_deleted_files(
     )?;
     Ok(count as i64)
 }
-pub fn insert_job(_conn: &Connection, _root_id: i64, _marker: i64, _now: i64) -> Result<i64, AppError> { todo!() }
-pub fn update_job_phase(_conn: &Connection, _job_id: i64, _phase: &str, _now: i64) -> Result<(), AppError> { todo!() }
-pub fn update_job_counts(_conn: &Connection, _job_id: i64, _counts: &JobCounts, _now: i64) -> Result<(), AppError> { todo!() }
-pub fn complete_job(_conn: &Connection, _job_id: i64, _counts: &JobCounts, _now: i64) -> Result<(), AppError> { todo!() }
-pub fn log_activity(_conn: &Connection, _event_type: &str, _root_id: Option<i64>, _file_id: Option<i64>, _job_id: Option<i64>, _detail: Option<&str>, _created_at: i64) -> Result<(), AppError> { todo!() }
+pub fn insert_job(
+    conn: &Connection,
+    root_id: i64,
+    marker: i64,
+    now: i64,
+) -> Result<i64, AppError> {
+    conn.execute(
+        "INSERT INTO index_jobs (root_id, status, phase, index_marker, started_at, updated_at)
+         VALUES (?1, 'running', 'discovering', ?2, ?3, ?3)",
+        params![root_id, marker, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_job_phase(
+    conn: &Connection,
+    job_id: i64,
+    phase: &str,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE index_jobs SET phase = ?1, updated_at = ?2 WHERE id = ?3",
+        params![phase, now, job_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_job_counts(
+    conn: &Connection,
+    job_id: i64,
+    counts: &JobCounts,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE index_jobs SET
+           files_total = ?1, files_done = ?2, files_added = ?3,
+           files_updated = ?4, files_moved = ?5, files_deleted = ?6,
+           error_count = ?7, updated_at = ?8
+         WHERE id = ?9",
+        params![
+            counts.files_total, counts.files_done, counts.files_added,
+            counts.files_updated, counts.files_moved, counts.files_deleted,
+            counts.error_count, now, job_id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn complete_job(
+    conn: &Connection,
+    job_id: i64,
+    counts: &JobCounts,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE index_jobs SET
+           status = 'completed', phase = NULL,
+           files_total = ?1, files_done = ?2, files_added = ?3,
+           files_updated = ?4, files_moved = ?5, files_deleted = ?6,
+           error_count = ?7, updated_at = ?8, completed_at = ?8
+         WHERE id = ?9",
+        params![
+            counts.files_total, counts.files_done, counts.files_added,
+            counts.files_updated, counts.files_moved, counts.files_deleted,
+            counts.error_count, now, job_id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn log_activity(
+    conn: &Connection,
+    event_type: &str,
+    root_id: Option<i64>,
+    file_id: Option<i64>,
+    job_id: Option<i64>,
+    detail: Option<&str>,
+    created_at: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO activity_log (event_type, root_id, file_id, job_id, detail, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![event_type, root_id, file_id, job_id, detail, created_at],
+    )?;
+    Ok(())
+}
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
@@ -615,5 +696,64 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert!(deleted.is_some());
+    }
+
+    #[test]
+    fn test_insert_and_complete_job() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let job_id = insert_job(&conn, root.id, 42, now).unwrap();
+        assert!(job_id > 0);
+        let status: String = conn.query_row(
+            "SELECT status FROM index_jobs WHERE id = ?1",
+            params![job_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(status, "running");
+
+        let counts = JobCounts {
+            files_total: 10, files_done: 10, files_added: 8,
+            files_updated: 1, files_moved: 1, files_deleted: 0, error_count: 0,
+        };
+        complete_job(&conn, job_id, &counts, now).unwrap();
+        let (status, added): (String, i64) = conn.query_row(
+            "SELECT status, files_added FROM index_jobs WHERE id = ?1",
+            params![job_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(added, 8);
+    }
+
+    #[test]
+    fn test_update_job_phase() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let job_id = insert_job(&conn, root.id, 1, now).unwrap();
+        update_job_phase(&conn, job_id, "fingerprinting", now).unwrap();
+        let phase: String = conn.query_row(
+            "SELECT phase FROM index_jobs WHERE id = ?1",
+            params![job_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(phase, "fingerprinting");
+    }
+
+    #[test]
+    fn test_log_activity_inserts_rows() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let job_id = insert_job(&conn, root.id, 1, now).unwrap();
+        log_activity(&conn, "job_started", Some(root.id), None, Some(job_id), None, now).unwrap();
+        log_activity(&conn, "job_completed", Some(root.id), None, Some(job_id), None, now).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM activity_log WHERE job_id = ?1",
+            params![job_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 2);
     }
 }
