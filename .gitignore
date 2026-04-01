@@ -4,3 +4,6 @@ desktop/src-tauri/target/
 .DS_Store
 *.log
 .env
+.claude/
+CLAUDE.md
+docs/superpowers/
