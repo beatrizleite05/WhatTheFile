@@ -8,3 +8,4 @@ desktop/src-tauri/target/
 CLAUDE.md
 docs/superpowers/
 .worktrees/
+desktop/src-tauri/gen/
