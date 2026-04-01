@@ -22,10 +22,11 @@ export function shouldIndexFile(
 ): boolean {
   const normalized = filePath.replace(/\\/g, '/');
 
-  // Must be under an included root
-  const inRoot = policy.includeRoots.some(root =>
-    normalized.startsWith(root.replace(/\\/g, '/'))
-  );
+  // Must be under an included root (path-prefix, not substring)
+  const inRoot = policy.includeRoots.some(root => {
+    const normalizedRoot = root.replace(/\\/g, '/').replace(/\/$/, '');
+    return normalized.startsWith(normalizedRoot + '/');
+  });
   if (!inRoot) return false;
 
   // Reject hidden files (filename starts with '.')

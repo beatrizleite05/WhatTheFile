@@ -35,4 +35,12 @@ describe('shouldIndexFile', () => {
   it('rejects paths outside included roots', () => {
     expect(shouldIndexFile('/Users/me/Downloads/a.txt', 200, policy)).toBe(false);
   });
+
+  it('does not match a root that is a strict prefix of another root name', () => {
+    const narrowPolicy: ScanPolicy = {
+      ...policy,
+      includeRoots: ['/Users/me/Doc'],
+    };
+    expect(shouldIndexFile('/Users/me/Documents/roadmap.docx', 4096, narrowPolicy)).toBe(false);
+  });
 });
