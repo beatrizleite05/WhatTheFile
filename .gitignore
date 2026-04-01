@@ -7,3 +7,4 @@ desktop/src-tauri/target/
 .claude/
 CLAUDE.md
 docs/superpowers/
+.worktrees/
