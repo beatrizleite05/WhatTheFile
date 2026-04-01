@@ -260,12 +260,136 @@ pub fn update_root_last_indexed(conn: &Connection, root_id: i64, ts: i64) -> Res
     )?;
     Ok(())
 }
-pub fn find_file_by_path(_conn: &Connection, _root_id: i64, _rel_path: &str) -> Result<Option<FileRecord>, AppError> { todo!() }
-pub fn find_file_by_fingerprint(_conn: &Connection, _root_id: i64, _fingerprint: &str) -> Result<Option<FileRecord>, AppError> { todo!() }
-pub fn upsert_file_metadata(_conn: &Connection, _root_id: i64, _rel_path: &str, _filename: &str, _media_type: &str, _size_bytes: i64, _mtime_ns: i64, _fingerprint: &str, _model_version: &str, _index_marker: i64, _indexed_at: i64) -> Result<i64, AppError> { todo!() }
-pub fn stamp_index_marker(_conn: &Connection, _file_id: i64, _marker: i64, _now: i64) -> Result<(), AppError> { todo!() }
-pub fn move_file(_conn: &Connection, _file_id: i64, _new_rel_path: &str, _new_filename: &str, _new_mtime_ns: i64, _marker: i64, _now: i64) -> Result<(), AppError> { todo!() }
-pub fn sweep_deleted_files(_conn: &Connection, _root_id: i64, _marker: i64, _deleted_at: i64) -> Result<i64, AppError> { todo!() }
+pub fn find_file_by_path(
+    conn: &Connection,
+    root_id: i64,
+    rel_path: &str,
+) -> Result<Option<FileRecord>, AppError> {
+    conn.query_row(
+        "SELECT id, root_id, rel_path, filename, fingerprint, model_version, mtime_ns, size_bytes, index_marker
+         FROM files WHERE root_id = ?1 AND rel_path = ?2 AND deleted_at IS NULL",
+        params![root_id, rel_path],
+        |row| Ok(FileRecord {
+            id: row.get(0)?,
+            root_id: row.get(1)?,
+            rel_path: row.get(2)?,
+            filename: row.get(3)?,
+            fingerprint: row.get(4)?,
+            model_version: row.get(5)?,
+            mtime_ns: row.get(6)?,
+            size_bytes: row.get(7)?,
+            index_marker: row.get(8)?,
+        }),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn find_file_by_fingerprint(
+    conn: &Connection,
+    root_id: i64,
+    fingerprint: &str,
+) -> Result<Option<FileRecord>, AppError> {
+    conn.query_row(
+        "SELECT id, root_id, rel_path, filename, fingerprint, model_version, mtime_ns, size_bytes, index_marker
+         FROM files WHERE root_id = ?1 AND fingerprint = ?2 AND deleted_at IS NULL LIMIT 1",
+        params![root_id, fingerprint],
+        |row| Ok(FileRecord {
+            id: row.get(0)?,
+            root_id: row.get(1)?,
+            rel_path: row.get(2)?,
+            filename: row.get(3)?,
+            fingerprint: row.get(4)?,
+            model_version: row.get(5)?,
+            mtime_ns: row.get(6)?,
+            size_bytes: row.get(7)?,
+            index_marker: row.get(8)?,
+        }),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn upsert_file_metadata(
+    conn: &Connection,
+    root_id: i64,
+    rel_path: &str,
+    filename: &str,
+    media_type: &str,
+    size_bytes: i64,
+    mtime_ns: i64,
+    fingerprint: &str,
+    model_version: &str,
+    index_marker: i64,
+    indexed_at: i64,
+) -> Result<i64, AppError> {
+    let id: i64 = conn.query_row(
+        "INSERT INTO files
+           (root_id, rel_path, filename, media_type, size_bytes, mtime_ns,
+            fingerprint, model_version, index_marker, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(root_id, rel_path) DO UPDATE SET
+           filename      = excluded.filename,
+           media_type    = excluded.media_type,
+           size_bytes    = excluded.size_bytes,
+           mtime_ns      = excluded.mtime_ns,
+           fingerprint   = excluded.fingerprint,
+           model_version = excluded.model_version,
+           index_marker  = excluded.index_marker,
+           indexed_at    = excluded.indexed_at,
+           deleted_at    = NULL
+         RETURNING id",
+        params![root_id, rel_path, filename, media_type, size_bytes, mtime_ns,
+                fingerprint, model_version, index_marker, indexed_at],
+        |row| row.get(0),
+    )?;
+    Ok(id)
+}
+
+pub fn stamp_index_marker(
+    conn: &Connection,
+    file_id: i64,
+    marker: i64,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE files SET index_marker = ?1, indexed_at = ?2 WHERE id = ?3",
+        params![marker, now, file_id],
+    )?;
+    Ok(())
+}
+
+pub fn move_file(
+    conn: &Connection,
+    file_id: i64,
+    new_rel_path: &str,
+    new_filename: &str,
+    new_mtime_ns: i64,
+    marker: i64,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE files SET rel_path = ?1, filename = ?2, mtime_ns = ?3,
+                          index_marker = ?4, indexed_at = ?5, deleted_at = NULL
+         WHERE id = ?6",
+        params![new_rel_path, new_filename, new_mtime_ns, marker, now, file_id],
+    )?;
+    Ok(())
+}
+
+pub fn sweep_deleted_files(
+    conn: &Connection,
+    root_id: i64,
+    marker: i64,
+    deleted_at: i64,
+) -> Result<i64, AppError> {
+    let count = conn.execute(
+        "UPDATE files SET deleted_at = ?1
+         WHERE root_id = ?2 AND index_marker != ?3 AND deleted_at IS NULL",
+        params![deleted_at, root_id, marker],
+    )?;
+    Ok(count as i64)
+}
 pub fn insert_job(_conn: &Connection, _root_id: i64, _marker: i64, _now: i64) -> Result<i64, AppError> { todo!() }
 pub fn update_job_phase(_conn: &Connection, _job_id: i64, _phase: &str, _now: i64) -> Result<(), AppError> { todo!() }
 pub fn update_job_counts(_conn: &Connection, _job_id: i64, _counts: &JobCounts, _now: i64) -> Result<(), AppError> { todo!() }
@@ -381,5 +505,115 @@ mod tests {
         update_root_last_indexed(&conn, root.id, 1_700_000_000).unwrap();
         let found = find_root_by_id(&conn, root.id).unwrap().unwrap();
         assert_eq!(found.last_indexed_at, Some(1_700_000_000));
+    }
+
+    fn insert_test_root(conn: &Connection) -> Root {
+        insert_root(conn, "/tmp/test-root").unwrap()
+    }
+
+    #[test]
+    fn test_upsert_file_inserts_new_record() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "docs/notes.txt", "notes.txt", "txt",
+            1024, 1_700_000_000_000_000, "abc123", "", 1, now,
+        ).unwrap();
+        assert!(id > 0);
+        let record = find_file_by_path(&conn, root.id, "docs/notes.txt").unwrap().unwrap();
+        assert_eq!(record.fingerprint, "abc123");
+        assert_eq!(record.size_bytes, 1024);
+    }
+
+    #[test]
+    fn test_upsert_file_updates_existing_record() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        upsert_file_metadata(&conn, root.id, "a.txt", "a.txt", "txt", 100, 1000, "fp1", "", 1, now).unwrap();
+        upsert_file_metadata(&conn, root.id, "a.txt", "a.txt", "txt", 200, 2000, "fp2", "", 2, now).unwrap();
+        let record = find_file_by_path(&conn, root.id, "a.txt").unwrap().unwrap();
+        assert_eq!(record.fingerprint, "fp2");
+        assert_eq!(record.size_bytes, 200);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE root_id = ?1",
+            params![root.id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_find_file_by_fingerprint() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        upsert_file_metadata(&conn, root.id, "a.txt", "a.txt", "txt", 100, 1000, "unique_fp", "", 1, now).unwrap();
+        let found = find_file_by_fingerprint(&conn, root.id, "unique_fp").unwrap().unwrap();
+        assert_eq!(found.rel_path, "a.txt");
+        assert!(find_file_by_fingerprint(&conn, root.id, "nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_stamp_index_marker_updates_marker() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(&conn, root.id, "a.txt", "a.txt", "txt", 100, 1000, "fp", "", 1, now).unwrap();
+        stamp_index_marker(&conn, id, 99, now).unwrap();
+        let record = find_file_by_path(&conn, root.id, "a.txt").unwrap().unwrap();
+        assert_eq!(record.index_marker, 99);
+    }
+
+    #[test]
+    fn test_move_file_updates_path() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(&conn, root.id, "old/a.txt", "a.txt", "txt", 100, 1000, "fp", "", 1, now).unwrap();
+        move_file(&conn, id, "new/a.txt", "a.txt", 2000, 2, now).unwrap();
+        assert!(find_file_by_path(&conn, root.id, "old/a.txt").unwrap().is_none());
+        let moved = find_file_by_path(&conn, root.id, "new/a.txt").unwrap().unwrap();
+        assert_eq!(moved.index_marker, 2);
+    }
+
+    #[test]
+    fn test_sweep_deleted_files_soft_deletes_unseen() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        upsert_file_metadata(&conn, root.id, "keep.txt", "keep.txt", "txt", 100, 1000, "fp1", "", 1, now).unwrap();
+        upsert_file_metadata(&conn, root.id, "gone.txt", "gone.txt", "txt", 100, 1000, "fp2", "", 0, now).unwrap();
+        let deleted = sweep_deleted_files(&conn, root.id, 1, now).unwrap();
+        assert_eq!(deleted, 1);
+        let active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+            params![root.id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(active, 1);
+        let deleted_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NOT NULL",
+            params![root.id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(deleted_count, 1);
+    }
+
+    #[test]
+    fn test_soft_deleted_file_not_found_by_fingerprint() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(&conn, root.id, "a.txt", "a.txt", "txt", 100, 1000, "fp", "", 0, now).unwrap();
+        sweep_deleted_files(&conn, root.id, 1, now).unwrap();
+        assert!(find_file_by_fingerprint(&conn, root.id, "fp").unwrap().is_none());
+        let deleted: Option<i64> = conn.query_row(
+            "SELECT deleted_at FROM files WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert!(deleted.is_some());
     }
 }
