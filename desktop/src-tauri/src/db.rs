@@ -194,10 +194,72 @@ pub fn recover_interrupted_jobs(conn: &Connection) -> Result<(), AppError> {
 
 // ── stubs for Tasks 6–8 ───────────────────────────────────────────────────────
 
-pub fn insert_root(_conn: &Connection, _path: &str) -> Result<Root, AppError> { todo!() }
-pub fn find_root_by_path(_conn: &Connection, _path: &str) -> Result<Option<Root>, AppError> { todo!() }
-pub fn find_root_by_id(_conn: &Connection, _id: i64) -> Result<Option<Root>, AppError> { todo!() }
-pub fn update_root_last_indexed(_conn: &Connection, _root_id: i64, _ts: i64) -> Result<(), AppError> { todo!() }
+pub fn insert_root(conn: &Connection, path: &str) -> Result<Root, AppError> {
+    let label = Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let now = unix_now();
+    conn.execute(
+        "INSERT INTO roots (path, label, active, created_at) VALUES (?1, ?2, 1, ?3)",
+        params![path, label, now],
+    )?;
+    Ok(Root {
+        id: conn.last_insert_rowid(),
+        path: path.to_string(),
+        label,
+        active: true,
+        created_at: now,
+        last_indexed_at: None,
+    })
+}
+
+pub fn find_root_by_path(conn: &Connection, path: &str) -> Result<Option<Root>, AppError> {
+    conn.query_row(
+        "SELECT id, path, label, active, created_at, last_indexed_at FROM roots WHERE path = ?1",
+        params![path],
+        |row| {
+            Ok(Root {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                label: row.get(2)?,
+                active: row.get::<_, i64>(3).map(|v| v != 0)?,
+                created_at: row.get(4)?,
+                last_indexed_at: row.get(5)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn find_root_by_id(conn: &Connection, id: i64) -> Result<Option<Root>, AppError> {
+    conn.query_row(
+        "SELECT id, path, label, active, created_at, last_indexed_at FROM roots WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(Root {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                label: row.get(2)?,
+                active: row.get::<_, i64>(3).map(|v| v != 0)?,
+                created_at: row.get(4)?,
+                last_indexed_at: row.get(5)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn update_root_last_indexed(conn: &Connection, root_id: i64, ts: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE roots SET last_indexed_at = ?1 WHERE id = ?2",
+        params![ts, root_id],
+    )?;
+    Ok(())
+}
 pub fn find_file_by_path(_conn: &Connection, _root_id: i64, _rel_path: &str) -> Result<Option<FileRecord>, AppError> { todo!() }
 pub fn find_file_by_fingerprint(_conn: &Connection, _root_id: i64, _fingerprint: &str) -> Result<Option<FileRecord>, AppError> { todo!() }
 pub fn upsert_file_metadata(_conn: &Connection, _root_id: i64, _rel_path: &str, _filename: &str, _media_type: &str, _size_bytes: i64, _mtime_ns: i64, _fingerprint: &str, _model_version: &str, _index_marker: i64, _indexed_at: i64) -> Result<i64, AppError> { todo!() }
@@ -273,5 +335,51 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(status, "completed");
+    }
+
+    #[test]
+    fn test_insert_root_returns_correct_fields() {
+        let conn = setup();
+        let root = insert_root(&conn, "/tmp/test-docs").unwrap();
+        assert_eq!(root.path, "/tmp/test-docs");
+        assert_eq!(root.label, "test-docs");
+        assert!(root.active);
+        assert!(root.id > 0);
+        assert!(root.created_at > 0);
+        assert!(root.last_indexed_at.is_none());
+    }
+
+    #[test]
+    fn test_find_root_by_path_returns_none_for_missing() {
+        let conn = setup();
+        let result = find_root_by_path(&conn, "/nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_root_by_path_returns_existing() {
+        let conn = setup();
+        let inserted = insert_root(&conn, "/tmp/docs").unwrap();
+        let found = find_root_by_path(&conn, "/tmp/docs").unwrap().unwrap();
+        assert_eq!(found.id, inserted.id);
+        assert_eq!(found.path, "/tmp/docs");
+    }
+
+    #[test]
+    fn test_find_root_by_id() {
+        let conn = setup();
+        let inserted = insert_root(&conn, "/tmp/docs").unwrap();
+        let found = find_root_by_id(&conn, inserted.id).unwrap().unwrap();
+        assert_eq!(found.path, "/tmp/docs");
+        assert!(find_root_by_id(&conn, 9999).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_update_root_last_indexed() {
+        let conn = setup();
+        let root = insert_root(&conn, "/tmp/docs").unwrap();
+        update_root_last_indexed(&conn, root.id, 1_700_000_000).unwrap();
+        let found = find_root_by_id(&conn, root.id).unwrap().unwrap();
+        assert_eq!(found.last_indexed_at, Some(1_700_000_000));
     }
 }
