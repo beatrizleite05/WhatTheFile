@@ -82,6 +82,8 @@ export function parseNaturalLanguageQuery(input: string): SearchRequest {
   }
 
   const unresolvedTokens = tokens.filter((_, i) => !consumed.has(i));
+  // When all tokens are consumed as structured params (e.g. "pdf 2024"),
+  // fall back to the full input as query text so FTS/vector still have something to search.
   const queryText = unresolvedTokens.join(' ') || input.trim();
   const unresolvedCount = unresolvedTokens.length;
 
