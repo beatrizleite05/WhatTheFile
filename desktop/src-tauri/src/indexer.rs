@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use tauri::Emitter;
 use crate::{db, errors::AppError};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -47,11 +48,18 @@ struct FileCandidate {
 // ── public API ────────────────────────────────────────────────────────────────
 
 pub fn run(
-    _app: &tauri::AppHandle,
-    _db_path: &Path,
-    _root_id: i64,
+    app: &tauri::AppHandle,
+    db_path: &Path,
+    root_id: i64,
 ) -> Result<i64, AppError> {
-    todo!("wire up in Task 12")
+    let conn = db::open_and_migrate(db_path)?;
+    let root = db::find_root_by_id(&conn, root_id)?
+        .ok_or_else(|| AppError::Indexer(format!("root {root_id} not found")))?;
+    let root_path = PathBuf::from(&root.path);
+    let app = app.clone();
+    run_scan(&conn, root_id, &root_path, &|event, payload| {
+        let _ = app.emit(event, payload);
+    })
 }
 
 // ── internal (testable) ───────────────────────────────────────────────────────
