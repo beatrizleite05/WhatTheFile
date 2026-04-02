@@ -9,10 +9,25 @@ mod platform;
 #[path = "search.rs"]
 mod search_engine;
 
+use std::path::PathBuf;
 use serde_json::Value;
+use crate::config::RootPayload;
+
+pub struct AppState {
+    pub db_path: PathBuf,
+}
 
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            use tauri::Manager;
+            let app_data = app.path().app_data_dir()?;
+            std::fs::create_dir_all(app_data.join("db"))?;
+            let db_path = app_data.join("db").join("index.sqlite");
+            db::open_and_migrate(&db_path)?;
+            app.manage(AppState { db_path });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             search,
             start_indexing,
@@ -25,22 +40,40 @@ pub fn run() {
 }
 
 #[tauri::command]
-async fn search(query: String) -> Result<Value, String> {
+async fn add_root(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<RootPayload, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        config::add_root(&conn, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn start_indexing(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    root_id: i64,
+) -> Result<i64, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        indexer::run(&app, &db_path, root_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn search(_query: String) -> Result<Value, String> {
     todo!("Phase D: implement search command")
 }
 
 #[tauri::command]
-async fn start_indexing(root_path: String) -> Result<(), String> {
-    todo!("Phase B: implement start_indexing command")
-}
-
-#[tauri::command]
-async fn add_root(path: String) -> Result<(), String> {
-    todo!("Phase B: implement add_root command")
-}
-
-#[tauri::command]
-async fn open_file(path: String) -> Result<(), String> {
+async fn open_file(_path: String) -> Result<(), String> {
     todo!("Phase E: implement open_file command")
 }
 
