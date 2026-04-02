@@ -41,6 +41,7 @@ struct FileCandidate {
     media_type: &'static str,
     size_bytes: i64,
     mtime_ns: i64,
+    previously_existed: bool,
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
@@ -89,6 +90,17 @@ fn run_scan(
 
     for entry in WalkDir::new(root_path)
         .into_iter()
+        .filter_entry(|e| {
+            // Skip hidden directories (but allow walking from root itself)
+            if e.depth() > 0 {
+                if let Some(name) = e.file_name().to_str() {
+                    if name.starts_with('.') {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
         .filter_map(|e| e.ok())
     {
         if !entry.file_type().is_file() {
@@ -134,7 +146,8 @@ fn run_scan(
         counts.files_total += 1;
 
         // Fast pass: mtime + size check
-        if let Some(existing) = db::find_file_by_path(conn, root_id, &rel_path)? {
+        let existing_record = db::find_file_by_path(conn, root_id, &rel_path)?;
+        if let Some(ref existing) = existing_record {
             if existing.mtime_ns == mtime_ns && existing.size_bytes == size_bytes {
                 db::stamp_index_marker(conn, existing.id, marker, db::unix_now())?;
                 counts.files_done += 1;
@@ -150,8 +163,9 @@ fn run_scan(
                 continue;
             }
         }
+        let previously_existed = existing_record.is_some();
 
-        candidates.push(FileCandidate { path, rel_path, filename, media_type, size_bytes, mtime_ns });
+        candidates.push(FileCandidate { path, rel_path, filename, media_type, size_bytes, mtime_ns, previously_existed });
     }
 
     // Update phase
@@ -198,7 +212,7 @@ fn run_scan(
         }
 
         // New or changed file
-        let previously_existed = db::find_file_by_path(conn, root_id, &candidate.rel_path)?.is_some();
+        let previously_existed = candidate.previously_existed;
         db::upsert_file_metadata(
             conn,
             root_id,
@@ -418,9 +432,9 @@ mod tests {
     }
 
     #[test]
-    fn test_oversized_file_is_skipped() {
-        // We can't actually create a 100MB file in a unit test,
-        // so test the detect path indirectly: verify only .txt is indexed.
+    fn test_unknown_extension_is_skipped() {
+        // Files with unknown extensions (e.g. .bin) are filtered out by
+        // detect_media_type; only files with recognised extensions are indexed.
         let (tmp, conn) = setup_db();
         let root_dir = tmp.path().join("root");
         std::fs::create_dir(&root_dir).unwrap();
