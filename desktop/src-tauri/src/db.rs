@@ -477,6 +477,79 @@ pub fn log_activity(
     Ok(())
 }
 
+// ── Phase C: extraction content helpers ──────────────────────────────────────
+
+/// Update the extracted content fields for a file that has been processed by
+/// the extraction pipeline.  Called after `extractor::extract` succeeds.
+pub fn update_file_content(
+    conn: &Connection,
+    file_id: i64,
+    extracted_text: &str,
+    confidence: f32,
+    lang_hint: &str,
+    model_version: &str,
+    now: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE files SET extracted_text = ?1, confidence = ?2, lang_hint = ?3,
+                          model_version = ?4, indexed_at = ?5
+         WHERE id = ?6",
+        params![extracted_text, confidence, lang_hint, model_version, now, file_id],
+    )?;
+    Ok(())
+}
+
+/// Atomically replace all chunks for `file_id` with the provided slice.
+/// Runs DELETE + INSERT inside a savepoint so the table is never partially
+/// updated if an error occurs mid-way.
+pub fn replace_chunks(
+    conn: &Connection,
+    file_id: i64,
+    chunks: &[(usize, &str)],
+) -> Result<(), AppError> {
+    conn.execute_batch("SAVEPOINT replace_chunks")?;
+    let result = (|| -> Result<(), AppError> {
+        conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO chunks (file_id, chunk_index, text) VALUES (?1, ?2, ?3)",
+        )?;
+        for (idx, text) in chunks {
+            stmt.execute(params![file_id, *idx as i64, text])?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("RELEASE replace_chunks")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO replace_chunks");
+            Err(e)
+        }
+    }
+}
+
+/// Return files that have not yet been processed by the extraction pipeline
+/// (i.e. `model_version` is still the empty string set by Phase B).
+pub fn find_files_needing_extraction(
+    conn: &Connection,
+    root_id: i64,
+) -> Result<Vec<(i64, String, String)>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, rel_path, media_type FROM files
+         WHERE root_id = ?1 AND model_version = '' AND deleted_at IS NULL",
+    )?;
+    let rows = stmt.query_map(params![root_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -773,6 +846,137 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(status, "running");
+    }
+
+    // ── Phase C db helpers ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_update_file_content_persists_fields() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt",
+            100, 1000, "fp", "", 1, now,
+        ).unwrap();
+        update_file_content(&conn, id, "hello world", 0.95, "en", "ext-v1", now).unwrap();
+        let (text, confidence, lang, mv): (String, f64, String, String) = conn.query_row(
+            "SELECT extracted_text, confidence, lang_hint, model_version FROM files WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap();
+        assert_eq!(text, "hello world");
+        assert!((confidence - 0.95).abs() < 1e-6);
+        assert_eq!(lang, "en");
+        assert_eq!(mv, "ext-v1");
+    }
+
+    #[test]
+    fn test_replace_chunks_inserts_all() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt",
+            100, 1000, "fp", "", 1, now,
+        ).unwrap();
+        let chunks = vec![(0usize, "chunk zero"), (1, "chunk one"), (2, "chunk two")];
+        replace_chunks(&conn, id, &chunks).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_replace_chunks_deletes_stale_on_reindex() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt",
+            100, 1000, "fp", "", 1, now,
+        ).unwrap();
+        replace_chunks(&conn, id, &[(0, "old chunk a"), (1, "old chunk b")]).unwrap();
+        // Re-index: new extraction produces only one chunk
+        replace_chunks(&conn, id, &[(0, "new single chunk")]).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+        let text: String = conn.query_row(
+            "SELECT text FROM chunks WHERE file_id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(text, "new single chunk");
+    }
+
+    #[test]
+    fn test_chunks_cascade_deleted_with_file() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt",
+            100, 1000, "fp", "", 1, now,
+        ).unwrap();
+        replace_chunks(&conn, id, &[(0, "chunk")]).unwrap();
+        // Hard-delete the file (bypassing soft-delete, for test purposes)
+        conn.execute("DELETE FROM files WHERE id = ?1", params![id]).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 0, "chunks must be cascade-deleted when the parent file is deleted");
+    }
+
+    #[test]
+    fn test_find_files_needing_extraction_returns_only_unprocessed() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        // Not yet extracted (model_version = '')
+        let id_pending = upsert_file_metadata(
+            &conn, root.id, "pending.txt", "pending.txt", "txt",
+            100, 1000, "fp1", "", 1, now,
+        ).unwrap();
+        // Already extracted (model_version = 'ext-v1')
+        upsert_file_metadata(
+            &conn, root.id, "done.txt", "done.txt", "txt",
+            100, 1000, "fp2", "ext-v1", 1, now,
+        ).unwrap();
+        let pending = find_files_needing_extraction(&conn, root.id).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, id_pending);
+        assert_eq!(pending[0].1, "pending.txt");
+        assert_eq!(pending[0].2, "txt");
+    }
+
+    #[test]
+    fn test_find_files_needing_extraction_excludes_soft_deleted() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt",
+            100, 1000, "fp", "", 0, now,
+        ).unwrap();
+        sweep_deleted_files(&conn, root.id, 1, now).unwrap();
+        // Confirm soft-deleted
+        let deleted_at: Option<i64> = conn.query_row(
+            "SELECT deleted_at FROM files WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert!(deleted_at.is_some());
+        let pending = find_files_needing_extraction(&conn, root.id).unwrap();
+        assert!(pending.is_empty());
     }
 
     #[test]

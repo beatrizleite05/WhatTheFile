@@ -15,6 +15,7 @@ use crate::config::RootPayload;
 
 pub struct AppState {
     pub db_path: PathBuf,
+    pub ollama_url: String,
 }
 
 pub fn run() {
@@ -25,7 +26,10 @@ pub fn run() {
             std::fs::create_dir_all(app_data.join("db"))?;
             let db_path = app_data.join("db").join("index.sqlite");
             db::open_and_migrate(&db_path)?;
-            app.manage(AppState { db_path });
+            app.manage(AppState {
+                db_path,
+                ollama_url: llm::runtime::OLLAMA_BASE_URL.to_string(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,8 +64,9 @@ async fn start_indexing(
     root_id: i64,
 ) -> Result<i64, String> {
     let db_path = state.db_path.clone();
+    let ollama_url = state.ollama_url.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        indexer::run(&app, &db_path, root_id).map_err(|e| e.to_string())
+        indexer::run(&app, &db_path, root_id, &ollama_url).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

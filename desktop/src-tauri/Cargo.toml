@@ -21,6 +21,16 @@ tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 blake3 = "1"
 walkdir = "2"
+ureq = { version = "2", features = ["json"] }
+docx-rs = "0.4"
+calamine = "0.24"
+pdfium-render = { version = "0.8", features = ["image"] }
+image = "0.25"
+base64 = "0.22"
+
+leptess = "0.14"
+whatlang = "0.16"
+log = "0.4"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"

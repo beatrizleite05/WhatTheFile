@@ -1,5 +1,7 @@
 use crate::errors::AppError;
 
+pub const OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
 pub async fn ensure_model_loaded(_model: &str) -> Result<(), AppError> {
     todo!("Phase D: check Ollama, pull model if needed, enforce single model lease")
 }
