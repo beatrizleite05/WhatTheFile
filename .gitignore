@@ -9,3 +9,7 @@ CLAUDE.md
 docs/superpowers/
 .worktrees/
 desktop/src-tauri/gen/
+desktop/src-tauri/libpdfium.dylib
+desktop/src-tauri/libpdfium.so
+desktop/src-tauri/pdfium.dll
+desktop/src-tauri/1clear
