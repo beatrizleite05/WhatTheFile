@@ -67,4 +67,35 @@ describe('rankFiles', () => {
     expect(rankFiles(results, 0)).toEqual([]);
     expect(rankFiles(results, -1)).toEqual([]);
   });
+
+  it('returns all results when topK exceeds list length', () => {
+    const results = [
+      makeResult({ path: '/a.pdf', score: 0.9 }),
+      makeResult({ path: '/b.pdf', score: 0.7 }),
+      makeResult({ path: '/c.pdf', score: 0.5 })
+    ];
+    expect(rankFiles(results, 100)).toHaveLength(3);
+  });
+
+  it('sorts correctly across multiple items by score descending', () => {
+    const results = [
+      makeResult({ path: '/a.pdf', score: 0.3 }),
+      makeResult({ path: '/b.pdf', score: 0.9 }),
+      makeResult({ path: '/c.pdf', score: 0.6 }),
+      makeResult({ path: '/d.pdf', score: 0.1 })
+    ];
+    const ranked = rankFiles(results, 10);
+    expect(ranked.map(r => r.score)).toEqual([0.9, 0.6, 0.3, 0.1]);
+  });
+
+  it('sorts purely by path when all scores are equal', () => {
+    const results = [
+      makeResult({ path: '/d.pdf', score: 1.0 }),
+      makeResult({ path: '/b.pdf', score: 1.0 }),
+      makeResult({ path: '/a.pdf', score: 1.0 }),
+      makeResult({ path: '/c.pdf', score: 1.0 })
+    ];
+    const ranked = rankFiles(results, 10);
+    expect(ranked.map(r => r.path)).toEqual(['/a.pdf', '/b.pdf', '/c.pdf', '/d.pdf']);
+  });
 });
