@@ -29,7 +29,7 @@ WhatTheFile is a local-first desktop app for finding files by meaning — using 
 | Frontend | React + TypeScript |
 | Backend | Rust (Tauri backend) — extraction, indexing, embedding, retrieval |
 | Database | SQLite + `sqlite-vec` — metadata, FTS5, and vector tables in a single file |
-| Text embeddings | Ollama `nomic-embed-text` (64-dim) |
+| Text embeddings | Ollama `nomic-embed-text-v2-moe` (768-dim) |
 | Image understanding | Ollama `qwen2.5vl:7b` → text description → `nomic-embed-text` |
 
 No Python dependency. All AI inference goes through Ollama.
@@ -97,7 +97,7 @@ shared/                       Reserved — shared schemas and contracts
 - Persist per file: path, media type, timestamps, size, blake3 fingerprint, confidence, extracted text, structured metadata.
 - Two query paths:
   - **Keyword/FTS:** FTS5/BM25
-  - **Semantic:** vector similarity via `nomic-embed-text` (64-dim embeddings)
+  - **Semantic:** vector similarity via `nomic-embed-text-v2-moe` (768-dim embeddings)
 - Ranking: RRF blend (`1/(60+rank_fts) + 1/(60+rank_vec)`) in Rust `search.rs`; `ranking.ts` only re-sorts for display.
 - Single global index with `root_id` partitioning — cross-root search by default, per-root filtering available.
 - Results paged/cursor-based — no unbounded queries.
@@ -326,8 +326,8 @@ Parse user input into structured intent (`SearchRequest`):
 | 3 | Background runtime | Index on app open (incremental); background service is post-v1 |
 | 4 | Chunking | 256-token window, 32-token overlap |
 | 5 | Ranking | RRF in Rust (`search.rs`); display-layer sort only in `ranking.ts` |
-| 6 | Embedding dimensions | 64-dim (`nomic-embed-text`) |
-| 7 | Embedding provider | Ollama — `nomic-embed-text` for text; `qwen2.5vl:7b` / `llava:7b` for images |
+| 6 | Embedding dimensions | 768-dim (`nomic-embed-text-v2-moe`) — v2-moe outputs 768-dim by architecture; not configurable. Storage ~3KB/chunk; acceptable at desktop scale. |
+| 7 | Embedding provider | Ollama — `nomic-embed-text-v2-moe` for text; `qwen2.5vl:7b` / `llava:7b` for images |
 | 8 | Spreadsheet parsing | Flat normalization (file-level); sheet-aware is post-MVP |
 | 9 | OCR confidence threshold | `0.75` |
 | 10 | Multilingual | Accent folding + pt-BR/en translation dictionary |
