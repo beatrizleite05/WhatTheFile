@@ -1,0 +1,306 @@
+use super::*;
+use rusqlite::{Connection, params};
+use std::path::Path;
+use tempfile::tempdir;
+
+fn setup_db() -> (tempfile::TempDir, Connection) {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.sqlite");
+    let conn = db::open_and_migrate(&db_path).unwrap();
+    (dir, conn)
+}
+
+fn write_file(dir: &Path, name: &str, content: &str) {
+    std::fs::write(dir.join(name), content).unwrap();
+}
+
+fn no_emit(_: &str, _: &serde_json::Value) {}
+
+#[test]
+fn test_first_run_indexes_all_txt_files() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "hello");
+    write_file(&root_dir, "b.txt", "world");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    assert!(job_id > 0);
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 2);
+
+    let status: String = conn.query_row(
+        "SELECT status FROM index_jobs WHERE id = ?1",
+        params![job_id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(status, "completed");
+}
+
+#[test]
+fn test_first_run_files_added_count_matches() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "a");
+    write_file(&root_dir, "b.md", "b");
+    write_file(&root_dir, "c.csv", "c");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let added: i64 = conn.query_row(
+        "SELECT files_added FROM index_jobs WHERE id = ?1",
+        params![job_id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(added, 3);
+}
+
+#[test]
+fn test_second_run_with_no_changes_skips_all_files() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "hello");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let (added, updated): (i64, i64) = conn.query_row(
+        "SELECT files_added, files_updated FROM index_jobs WHERE id = ?1",
+        params![job_id2],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!(added, 0);
+    assert_eq!(updated, 0);
+}
+
+#[test]
+fn test_changed_file_is_reindexed() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "original content");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_file(&root_dir, "a.txt", "changed content");
+
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let updated: i64 = conn.query_row(
+        "SELECT files_updated FROM index_jobs WHERE id = ?1",
+        params![job_id2],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(updated, 1);
+}
+
+#[test]
+fn test_deleted_file_is_soft_deleted() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "hello");
+    write_file(&root_dir, "b.txt", "world");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    std::fs::remove_file(root_dir.join("b.txt")).unwrap();
+
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let deleted: i64 = conn.query_row(
+        "SELECT files_deleted FROM index_jobs WHERE id = ?1",
+        params![job_id2],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(deleted, 1);
+
+    let active: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(active, 1);
+}
+
+#[test]
+fn test_renamed_file_detected_as_move() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "old.txt", "stable content");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    std::fs::rename(root_dir.join("old.txt"), root_dir.join("new.txt")).unwrap();
+
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let (moved, added, deleted): (i64, i64, i64) = conn.query_row(
+        "SELECT files_moved, files_added, files_deleted FROM index_jobs WHERE id = ?1",
+        params![job_id2],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).unwrap();
+    assert_eq!(moved, 1);
+    assert_eq!(added, 0);
+    assert_eq!(deleted, 0);
+}
+
+#[test]
+fn test_unknown_extension_is_skipped() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "hello");
+    write_file(&root_dir, "a.bin", "binary");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_hidden_file_is_skipped() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "visible.txt", "hello");
+    write_file(&root_dir, ".hidden.txt", "secret");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_interrupted_job_marked_on_next_run() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let now = db::unix_now();
+    conn.execute(
+        "INSERT INTO index_jobs (root_id, status, index_marker, started_at, updated_at) VALUES (?1, 'running', 1, ?2, ?2)",
+        params![root.id, now],
+    ).unwrap();
+
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let interrupted: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM index_jobs WHERE status = 'interrupted'",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(interrupted, 1);
+}
+
+#[test]
+fn test_txt_files_have_extracted_text_after_scan() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "notes.txt", "the quick brown fox jumps over the lazy dog");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let (text, model_ver): (String, String) = conn.query_row(
+        "SELECT extracted_text, model_version FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert!(!text.is_empty(), "extracted_text should be populated after scan");
+    assert_eq!(model_ver, "ext-v1", "model_version should be set after extraction");
+}
+
+#[test]
+fn test_chunks_populated_for_txt_file() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "notes.txt", "word ".repeat(10).trim());
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let file_id: i64 = conn.query_row(
+        "SELECT id FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    let chunk_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
+        params![file_id],
+        |r| r.get(0),
+    ).unwrap();
+    assert!(chunk_count >= 1, "at least one chunk should be stored");
+}
+
+#[test]
+fn test_second_scan_skips_extraction_for_unchanged_file() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "stable content");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    conn.execute(
+        "UPDATE files SET extracted_text = 'sentinel' WHERE root_id = ?1",
+        params![root.id],
+    ).unwrap();
+
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let text: String = conn.query_row(
+        "SELECT extracted_text FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(text, "sentinel", "extraction should not re-run for unchanged file");
+}
+
+#[test]
+fn test_large_batch_completes_without_panic() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    for i in 0..500 {
+        write_file(&root_dir, &format!("{i}.txt"), &format!("content {i}"));
+    }
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(count, 500);
+}

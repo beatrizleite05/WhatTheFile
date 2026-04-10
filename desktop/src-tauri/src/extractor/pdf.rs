@@ -1,0 +1,322 @@
+use std::path::Path;
+use crate::errors::AppError;
+use crate::llm::vision;
+use super::{detect_lang, ExtractResult};
+
+/// OCR confidence threshold — chunks below this are discarded.
+pub(super) const OCR_CONFIDENCE_THRESHOLD: f32 = 0.75;
+
+/// Confidence assigned to vision-model output.
+///
+/// Vision descriptions are best-effort; we use the OCR threshold as a
+/// conservative proxy rather than claiming perfect (1.0) confidence.
+pub(super) const VISION_CONFIDENCE: f32 = OCR_CONFIDENCE_THRESHOLD;
+
+/// Tesseract language string — primary languages for this app.
+pub(super) const TESS_LANG: &str = "eng+por";
+
+pub(super) fn pdfium_instance() -> Result<pdfium_render::prelude::Pdfium, AppError> {
+    use pdfium_render::prelude::*;
+    let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+        &crate::platform::pdfium_dir(),
+    ))
+    .or_else(|_| Pdfium::bind_to_system_library())
+        .map_err(|e| AppError::Extractor(format!("pdfium load error: {e}")))?;
+    Ok(Pdfium::new(bindings))
+}
+
+pub(super) fn extract_pdf(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+    use pdfium_render::prelude::*;
+
+    let path_str = path.to_str().ok_or_else(|| {
+        AppError::Extractor(format!("invalid PDF path: {}", path.display()))
+    })?;
+
+    let pdfium = pdfium_instance()?;
+    let doc = pdfium
+        .load_pdf_from_file(path_str, None)
+        .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+
+    // Extract text layer from each page.
+    let mut text = String::new();
+    for page in doc.pages().iter() {
+        let page_text = page.text()
+            .map_err(|e| AppError::Extractor(format!("pdfium text error: {e}")))?
+            .all();
+        if !page_text.trim().is_empty() {
+            text.push_str(&page_text);
+            text.push('\n');
+        }
+    }
+
+    let trimmed = text.trim().to_string();
+    if !trimmed.is_empty() {
+        let lang_hint = detect_lang(&trimmed);
+        return Ok(ExtractResult { text: trimmed, confidence: 1.0, lang_hint });
+    }
+
+    // No text layer — scanned PDF. Try OCR first; fall back to vision if OCR
+    // confidence is too low or Tesseract is unavailable.
+    extract_pdf_via_ocr(path, ollama_url)
+}
+
+/// Rasterize a scanned PDF with pdfium and run Tesseract on each page.
+///
+/// Pages whose mean word confidence is below `OCR_CONFIDENCE_THRESHOLD` are
+/// skipped and collected for a vision-model second pass.
+fn extract_pdf_via_ocr(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+    use pdfium_render::prelude::*;
+
+    let path_str = path.to_str().ok_or_else(|| {
+        AppError::Extractor(format!("invalid PDF path: {}", path.display()))
+    })?;
+
+    let pdfium = pdfium_instance()?;
+    let doc = pdfium
+        .load_pdf_from_file(path_str, None)
+        .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+
+    // Higher resolution gives Tesseract more pixels to work with.
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(1024)
+        .set_maximum_height(1440);
+
+    let mut ocr_texts: Vec<String> = Vec::new();
+    let mut low_conf_page_indices: Vec<usize> = Vec::new();
+    let mut total_conf_sum = 0f32;
+    let mut total_conf_count = 0u32;
+
+    let tessdata = crate::platform::tessdata_dir();
+
+    for (page_idx, page) in doc.pages().iter().enumerate() {
+        let bitmap = page
+            .render_with_config(&render_config)
+            .map_err(|e| AppError::Extractor(format!("pdfium render error page {page_idx}: {e}")))?;
+
+        let rgba = bitmap.as_image().into_rgba8();
+
+        match run_tesseract_on_rgba(&tessdata, &rgba) {
+            Ok((text, conf)) if conf >= OCR_CONFIDENCE_THRESHOLD && !text.trim().is_empty() => {
+                ocr_texts.push(text);
+                total_conf_sum += conf;
+                total_conf_count += 1;
+            }
+            Ok((_, conf)) => {
+                // OCR ran but confidence too low — queue for vision fallback.
+                log::warn!("OCR confidence {conf:.2} below threshold for page {page_idx} of {}", path.display());
+                low_conf_page_indices.push(page_idx);
+            }
+            Err(e) => {
+                log::warn!("OCR failed for page {page_idx} of {}: {e}", path.display());
+                low_conf_page_indices.push(page_idx);
+            }
+        }
+    }
+
+    // If OCR produced nothing at all, fall through to full vision pass.
+    if ocr_texts.is_empty() {
+        log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
+        return extract_pdf_via_vision(path, ollama_url);
+    }
+
+    // For pages OCR couldn't handle, attempt vision on those pages only.
+    if !low_conf_page_indices.is_empty() {
+        let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url);
+        ocr_texts.extend(vision_texts);
+    }
+
+    let mean_confidence = if total_conf_count > 0 {
+        total_conf_sum / total_conf_count as f32
+    } else {
+        OCR_CONFIDENCE_THRESHOLD
+    };
+
+    let text = ocr_texts.join("\n\n").trim().to_string();
+    let lang_hint = detect_lang(&text);
+    Ok(ExtractResult { text, confidence: mean_confidence, lang_hint })
+}
+
+/// Run Tesseract on a raw RGBA pixel buffer.
+/// Returns `(extracted_text, mean_word_confidence_0_to_1)`.
+pub(super) fn run_tesseract_on_rgba(
+    tessdata: &str,
+    img: &image::RgbaImage,
+) -> Result<(String, f32), AppError> {
+    use leptess::LepTess;
+
+    let mut lt = LepTess::new(Some(tessdata), TESS_LANG)
+        .map_err(|e| AppError::Extractor(format!("Tesseract init error: {e}")))?;
+
+    // Encode RGBA image to PNG bytes; leptess::set_image_from_mem expects an
+    // encoded image format, not a raw pixel buffer.
+    let mut png_buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png_buf, image::ImageFormat::Png)
+        .map_err(|e| AppError::Extractor(format!("PNG encode for OCR error: {e}")))?;
+
+    lt.set_image_from_mem(png_buf.get_ref())
+        .map_err(|e| AppError::Extractor(format!("Tesseract set_image error: {e}")))?;
+
+    let text = lt
+        .get_utf8_text()
+        .map_err(|e| AppError::Extractor(format!("Tesseract get_text error: {e}")))?;
+
+    // mean_text_conf returns 0–100; normalise to 0.0–1.0.
+    let conf = lt.mean_text_conf() as f32 / 100.0;
+
+    Ok((text, conf))
+}
+
+/// Run vision model on a specific subset of pages from a PDF.
+/// Returns descriptions for pages that produce non-empty output; silently skips failures.
+fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url: &str) -> Vec<String> {
+    use pdfium_render::prelude::*;
+
+    let pdfium = match pdfium_instance() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let doc = match pdfium.load_pdf_from_file(path_str, None) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(512)
+        .set_maximum_height(720);
+
+    let mut descriptions = Vec::new();
+    for &page_idx in page_indices.iter() {
+        let page = match doc.pages().get(page_idx as u16) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let bitmap = match page.render_with_config(&render_config) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let rgba = bitmap.as_image().into_rgba8();
+        let img = image::RgbaImage::from_raw(
+            bitmap.width() as u32,
+            bitmap.height() as u32,
+            rgba.into_raw(),
+        );
+        let img = match img {
+            Some(i) => i,
+            None => continue,
+        };
+
+        // Write to a temp file for the vision call.
+        let tmp = match tempfile::Builder::new().suffix(".png").tempfile() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        {
+            use std::io::Write;
+            let mut buf = std::io::Cursor::new(Vec::new());
+            if img.write_to(&mut buf, image::ImageFormat::Png).is_err() {
+                continue;
+            }
+            match tmp.reopen() {
+                Ok(mut f) => {
+                    if let Err(e) = f.write_all(buf.get_ref()) {
+                        log::warn!("vision fallback: failed to write tmp PNG for page {page_idx} of {}: {e}", path.display());
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("vision fallback: failed to reopen tmp file for page {page_idx} of {}: {e}", path.display());
+                    continue;
+                }
+            }
+        }
+
+        let tmp_path = match tmp.path().to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        match vision::describe_image(tmp_path, ollama_url) {
+            Ok(desc) if !desc.trim().is_empty() => {
+                log::info!("vision fallback succeeded for page {page_idx} of {}", path.display());
+                descriptions.push(desc);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!("vision fallback failed for page {page_idx} of {}: {e}", path.display());
+            }
+        }
+
+    }
+
+    descriptions
+}
+
+fn extract_pdf_via_vision(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+    use pdfium_render::prelude::*;
+
+    let path_str = path.to_str().ok_or_else(|| {
+        AppError::Extractor(format!("invalid PDF path: {}", path.display()))
+    })?;
+
+    let pdfium = pdfium_instance()?;
+    let doc = pdfium
+        .load_pdf_from_file(path_str, None)
+        .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(512)
+        .set_maximum_height(720);
+
+    let mut descriptions = Vec::new();
+
+    for page in doc.pages().iter() {
+        let bitmap = page
+            .render_with_config(&render_config)
+            .map_err(|e| AppError::Extractor(format!("pdfium render error: {e}")))?;
+
+        let png_bytes = bitmap
+            .as_image()
+            .into_rgba8()
+            .to_vec();
+
+        // Write page PNG to a temp file so vision::describe_image can read it.
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .map_err(|e| AppError::Extractor(format!("tmp file error: {e}")))?;
+        {
+            use std::io::Write;
+            let img = image::RgbaImage::from_raw(
+                bitmap.width() as u32,
+                bitmap.height() as u32,
+                png_bytes,
+            )
+            .ok_or_else(|| AppError::Extractor("pdfium: image buffer size mismatch".into()))?;
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png)
+                .map_err(|e| AppError::Extractor(format!("png encode error: {e}")))?;
+            tmp.write_all(buf.get_ref())
+                .map_err(|e| AppError::Extractor(format!("tmp write error: {e}")))?;
+        }
+
+        let tmp_path = tmp.path().to_str().ok_or_else(|| {
+            AppError::Extractor("tmp path is not valid UTF-8".into())
+        })?;
+
+        match vision::describe_image(tmp_path, ollama_url) {
+            Ok(desc) if !desc.trim().is_empty() => descriptions.push(desc),
+            Ok(_) => {}
+            Err(_) => {} // skip pages where vision fails
+        }
+    }
+
+    let text = descriptions.join("\n\n").trim().to_string();
+    let lang_hint = detect_lang(&text);
+    Ok(ExtractResult { text, confidence: VISION_CONFIDENCE, lang_hint })
+}

@@ -1,6 +1,4 @@
 use rusqlite::Connection;
-#[cfg(test)]
-use rusqlite::params;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use tauri::Emitter;
@@ -74,14 +72,9 @@ fn run_scan(
     ollama_url: &str,
     emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<i64, AppError> {
-    // 1. Startup recovery
     db::recover_interrupted_jobs(conn)?;
 
-    // 2. Create index job
     let now = db::unix_now();
-    // Use nanosecond precision for the marker so that two back-to-back runs
-    // within the same wall-clock second still get distinct marker values,
-    // which is required for the soft-delete sweep to work correctly.
     let marker = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -97,13 +90,70 @@ fn run_scan(
         "filesUpdated": 0, "filesMoved": 0, "filesDeleted": 0,
     }));
 
-    // 3. Fast pass — collect candidates that need fingerprinting
+    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, emit)?;
+
+    db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
+    emit("indexing://progress", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
+        "filesTotal": counts.files_total, "filesDone": counts.files_done,
+        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+    }));
+
+    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, emit)?;
+
+    db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
+    emit("indexing://progress", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id, "phase": "extracting",
+        "filesTotal": counts.files_total, "filesDone": counts.files_done,
+        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+    }));
+
+    run_extraction(conn, root_id, root_path, ollama_url, &mut counts)?;
+
+    let now = db::unix_now();
+    counts.files_deleted = db::sweep_deleted_files(conn, root_id, marker, now)?;
+
+    db::complete_job(conn, job_id, &counts, now)?;
+    db::update_root_last_indexed(conn, root_id, now)?;
+    db::log_activity(conn, "job_completed", Some(root_id), None, Some(job_id), None, now)?;
+
+    emit("indexing://completed", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id,
+        "filesTotal": counts.files_total,
+        "filesAdded": counts.files_added,
+        "filesUpdated": counts.files_updated,
+        "filesMoved": counts.files_moved,
+        "filesDeleted": counts.files_deleted,
+        "errorCount": counts.error_count,
+    }));
+
+    // Release VRAM immediately after indexing completes.
+    match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
+        Ok(()) => log::info!("unloaded embedding model (nomic-embed-text-v2-moe)"),
+        Err(e) => log::warn!("unload embedding model failed (will remain in VRAM): {e}"),
+    }
+
+    Ok(job_id)
+}
+
+/// Walk the filesystem and collect files that need fingerprinting.
+/// Files whose mtime+size are unchanged are stamped and skipped immediately.
+fn run_discovery(
+    conn: &Connection,
+    root_id: i64,
+    root_path: &Path,
+    marker: i64,
+    job_id: i64,
+    counts: &mut db::JobCounts,
+    emit: &dyn Fn(&str, &serde_json::Value),
+) -> Result<Vec<FileCandidate>, AppError> {
     let mut candidates: Vec<FileCandidate> = Vec::new();
 
     for entry in WalkDir::new(root_path)
         .into_iter()
         .filter_entry(|e| {
-            // Skip hidden directories (but allow walking from root itself)
             if e.depth() > 0 {
                 if let Some(name) = e.file_name().to_str() {
                     if name.starts_with('.') {
@@ -125,25 +175,21 @@ fn run_scan(
             None => continue,
         };
 
-        // Skip hidden files
         if filename.starts_with('.') {
             continue;
         }
 
-        // Skip unknown media types
         let media_type = match detect_media_type(&filename) {
             Some(mt) => mt,
             None => continue,
         };
 
-        // Metadata
         let metadata = match std::fs::metadata(&path) {
             Ok(m) => m,
             Err(_) => { counts.error_count += 1; continue; }
         };
         let size_bytes = metadata.len() as i64;
 
-        // Skip oversized files
         if size_bytes > MAX_FILE_SIZE_BYTES {
             continue;
         }
@@ -157,14 +203,13 @@ fn run_scan(
 
         counts.files_total += 1;
 
-        // Fast pass: mtime + size check
         let existing_record = db::find_file_by_path(conn, root_id, &rel_path)?;
         if let Some(ref existing) = existing_record {
             if existing.mtime_ns == mtime_ns && existing.size_bytes == size_bytes {
                 db::stamp_index_marker(conn, existing.id, marker, db::unix_now())?;
                 counts.files_done += 1;
                 if counts.files_done % 50 == 0 {
-                    db::update_job_counts(conn, job_id, &counts, db::unix_now())?;
+                    db::update_job_counts(conn, job_id, counts, db::unix_now())?;
                     emit("indexing://progress", &serde_json::json!({
                         "jobId": job_id, "rootId": root_id, "phase": "discovering",
                         "filesTotal": counts.files_total, "filesDone": counts.files_done,
@@ -180,16 +225,19 @@ fn run_scan(
         candidates.push(FileCandidate { path, rel_path, filename, media_type, size_bytes, mtime_ns, previously_existed });
     }
 
-    // Update phase
-    db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
-    emit("indexing://progress", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
-        "filesTotal": counts.files_total, "filesDone": counts.files_done,
-        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-    }));
+    Ok(candidates)
+}
 
-    // 4. Fingerprint pass
+/// Hash each candidate and upsert/move records as appropriate.
+fn run_fingerprinting(
+    conn: &Connection,
+    root_id: i64,
+    marker: i64,
+    job_id: i64,
+    candidates: Vec<FileCandidate>,
+    counts: &mut db::JobCounts,
+    emit: &dyn Fn(&str, &serde_json::Value),
+) -> Result<(), AppError> {
     for candidate in candidates {
         let bytes = match std::fs::read(&candidate.path) {
             Ok(b) => b,
@@ -198,34 +246,22 @@ fn run_scan(
         let fingerprint = blake3::hash(&bytes).to_hex().to_string();
         let now = db::unix_now();
 
-        // Move detection: fingerprint found at a different rel_path
         if let Some(existing_fp) = db::find_file_by_fingerprint(conn, root_id, &fingerprint)? {
             if existing_fp.rel_path != candidate.rel_path {
-                db::move_file(
-                    conn,
-                    existing_fp.id,
-                    &candidate.rel_path,
-                    &candidate.filename,
-                    candidate.mtime_ns,
-                    marker,
-                    now,
-                )?;
+                db::move_file(conn, existing_fp.id, &candidate.rel_path, &candidate.filename, candidate.mtime_ns, marker, now)?;
                 counts.files_moved += 1;
                 counts.files_done += 1;
                 if counts.files_done % 50 == 0 {
-                    db::update_job_counts(conn, job_id, &counts, now)?;
+                    db::update_job_counts(conn, job_id, counts, now)?;
                 }
                 continue;
             }
             // Same path, same content (mtime drifted) — stamp so sweep keeps it.
-            // If model_version is empty, extraction has not run yet; the extraction pass will pick this file up via find_files_needing_extraction.
             db::stamp_index_marker(conn, existing_fp.id, marker, now)?;
             counts.files_done += 1;
             continue;
         }
 
-        // New or changed file
-        let previously_existed = candidate.previously_existed;
         db::upsert_file_metadata(
             conn,
             root_id,
@@ -235,12 +271,12 @@ fn run_scan(
             candidate.size_bytes,
             candidate.mtime_ns,
             &fingerprint,
-            "", // model_version: filled by Phase C
+            "", // model_version: filled by extraction phase
             marker,
             now,
         )?;
 
-        if previously_existed {
+        if candidate.previously_existed {
             counts.files_updated += 1;
         } else {
             counts.files_added += 1;
@@ -248,7 +284,7 @@ fn run_scan(
         counts.files_done += 1;
 
         if counts.files_done % 50 == 0 {
-            db::update_job_counts(conn, job_id, &counts, now)?;
+            db::update_job_counts(conn, job_id, counts, now)?;
             emit("indexing://progress", &serde_json::json!({
                 "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
                 "filesTotal": counts.files_total, "filesDone": counts.files_done,
@@ -257,16 +293,17 @@ fn run_scan(
             }));
         }
     }
+    Ok(())
+}
 
-    // 5. Extraction pass — process files whose model_version is still empty.
-    db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
-    emit("indexing://progress", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id, "phase": "extracting",
-        "filesTotal": counts.files_total, "filesDone": counts.files_done,
-        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-    }));
-
+/// Extract text and embed chunks for files whose model_version is still empty.
+fn run_extraction(
+    conn: &Connection,
+    root_id: i64,
+    root_path: &Path,
+    ollama_url: &str,
+    counts: &mut db::JobCounts,
+) -> Result<(), AppError> {
     let pending = db::find_files_needing_extraction(conn, root_id)?;
     for (file_id, rel_path, _media_type) in pending {
         let abs_path = root_path.join(&rel_path);
@@ -274,49 +311,23 @@ fn run_scan(
         match extractor::extract(&abs_path, ollama_url) {
             Ok(result) => {
                 if result.text.is_empty() {
-                    // OCR below confidence threshold — leave model_version empty so
-                    // a future run can retry (e.g. after Tesseract data is updated).
                     counts.error_count += 1;
                     continue;
                 }
-                let chunks = chunker::chunk_text(
-                    &result.text,
-                    chunker::CHUNK_SIZE,
-                    chunker::CHUNK_OVERLAP,
-                );
-
-                // Batch-embed all chunks in one Ollama round-trip.
-                // On failure (e.g. Ollama unreachable), store chunks without
-                // embeddings so the file is still text-searchable via FTS5.
-                let chunk_texts: Vec<&str> =
-                    chunks.iter().map(|c| c.text.as_str()).collect();
-                let embeddings_result =
-                    llm::embeddings::embed_texts(&chunk_texts, ollama_url);
+                let chunks = chunker::chunk_text(&result.text, chunker::CHUNK_SIZE, chunker::CHUNK_OVERLAP);
+                let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+                let embeddings_result = llm::embeddings::embed_texts(&chunk_texts, ollama_url);
                 let embedding_blobs: Vec<Option<Vec<u8>>> = match embeddings_result {
-                    Ok(vecs) => vecs
-                        .into_iter()
-                        .map(|v| Some(llm::embeddings::embedding_to_bytes(&v)))
-                        .collect(),
+                    Ok(vecs) => vecs.into_iter().map(|v| Some(llm::embeddings::embedding_to_bytes(&v))).collect(),
                     Err(_) => vec![None; chunks.len()],
                 };
-
                 let chunk_pairs: Vec<(usize, &str, Option<&[u8]>)> = chunks
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| {
-                        (i, c.text.as_str(), embedding_blobs[i].as_deref())
-                    })
+                    .map(|(i, c)| (i, c.text.as_str(), embedding_blobs[i].as_deref()))
                     .collect();
 
-                db::update_file_content(
-                    conn,
-                    file_id,
-                    &result.text,
-                    result.confidence,
-                    &result.lang_hint,
-                    "ext-v1",
-                    now,
-                )?;
+                db::update_file_content(conn, file_id, &result.text, result.confidence, &result.lang_hint, "ext-v1", now)?;
                 db::replace_chunks(conn, file_id, &chunk_pairs)?;
             }
             Err(_) => {
@@ -324,359 +335,9 @@ fn run_scan(
             }
         }
     }
-
-    // 6. Soft-delete sweep
-    let now = db::unix_now();
-    let deleted = db::sweep_deleted_files(conn, root_id, marker, now)?;
-    counts.files_deleted = deleted;
-
-    // 7. Complete job
-    db::complete_job(conn, job_id, &counts, now)?;
-    db::update_root_last_indexed(conn, root_id, now)?;
-    db::log_activity(conn, "job_completed", Some(root_id), None, Some(job_id), None, now)?;
-
-    emit("indexing://completed", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id,
-        "filesTotal": counts.files_total,
-        "filesAdded": counts.files_added,
-        "filesUpdated": counts.files_updated,
-        "filesMoved": counts.files_moved,
-        "filesDeleted": counts.files_deleted,
-        "errorCount": counts.error_count,
-    }));
-
-    // ── §4.3: explicit model unload after index completion ────────────────────
-    // Release VRAM immediately rather than waiting for the keep-alive window.
-    // Only unload models that were actually loaded (no need to unload if never used).
-    // The embedding model is always used during indexing (for all files that extract successfully).
-    // Vision models (qwen2.5vl:7b, llava:7b) are only used during image extraction.
-    // Errors are logged but do NOT fail the index run; Ollama downtime must not
-    // block indexing completion. Always attempt to unload the embedding model.
-    match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
-        Ok(()) => log::info!("unloaded embedding model (nomic-embed-text-v2-moe)"),
-        Err(e) => log::warn!("unload embedding model failed (will remain in VRAM): {e}"),
-    }
-
-    Ok(job_id)
+    Ok(())
 }
-
-// ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    fn setup_db() -> (tempfile::TempDir, Connection) {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.sqlite");
-        let conn = db::open_and_migrate(&db_path).unwrap();
-        (dir, conn)
-    }
-
-    fn write_file(dir: &Path, name: &str, content: &str) {
-        std::fs::write(dir.join(name), content).unwrap();
-    }
-
-    fn no_emit(_: &str, _: &serde_json::Value) {}
-
-    #[test]
-    fn test_first_run_indexes_all_txt_files() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "hello");
-        write_file(&root_dir, "b.txt", "world");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        assert!(job_id > 0);
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(count, 2);
-
-        let status: String = conn.query_row(
-            "SELECT status FROM index_jobs WHERE id = ?1",
-            params![job_id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(status, "completed");
-    }
-
-    #[test]
-    fn test_first_run_files_added_count_matches() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "a");
-        write_file(&root_dir, "b.md", "b");
-        write_file(&root_dir, "c.csv", "c");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let added: i64 = conn.query_row(
-            "SELECT files_added FROM index_jobs WHERE id = ?1",
-            params![job_id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(added, 3);
-    }
-
-    #[test]
-    fn test_second_run_with_no_changes_skips_all_files() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "hello");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        // Second run
-        let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-        let (added, updated): (i64, i64) = conn.query_row(
-            "SELECT files_added, files_updated FROM index_jobs WHERE id = ?1",
-            params![job_id2],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
-        assert_eq!(added, 0);
-        assert_eq!(updated, 0);
-    }
-
-    #[test]
-    fn test_changed_file_is_reindexed() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "original content");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        // Overwrite with new content (OS will update mtime)
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        write_file(&root_dir, "a.txt", "changed content");
-
-        let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-        let updated: i64 = conn.query_row(
-            "SELECT files_updated FROM index_jobs WHERE id = ?1",
-            params![job_id2],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(updated, 1);
-    }
-
-    #[test]
-    fn test_deleted_file_is_soft_deleted() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "hello");
-        write_file(&root_dir, "b.txt", "world");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        std::fs::remove_file(root_dir.join("b.txt")).unwrap();
-
-        let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-        let deleted: i64 = conn.query_row(
-            "SELECT files_deleted FROM index_jobs WHERE id = ?1",
-            params![job_id2],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(deleted, 1);
-
-        let active: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(active, 1);
-    }
-
-    #[test]
-    fn test_renamed_file_detected_as_move() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "old.txt", "stable content");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        std::fs::rename(root_dir.join("old.txt"), root_dir.join("new.txt")).unwrap();
-
-        let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-        let (moved, added, deleted): (i64, i64, i64) = conn.query_row(
-            "SELECT files_moved, files_added, files_deleted FROM index_jobs WHERE id = ?1",
-            params![job_id2],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        ).unwrap();
-        assert_eq!(moved, 1);
-        assert_eq!(added, 0);   // not treated as a new file
-        assert_eq!(deleted, 0); // not treated as deleted
-    }
-
-    #[test]
-    fn test_unknown_extension_is_skipped() {
-        // Files with unknown extensions (e.g. .bin) are filtered out by
-        // detect_media_type; only files with recognised extensions are indexed.
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "hello");
-        // Create a .bin file (unknown media type — skipped)
-        write_file(&root_dir, "a.bin", "binary");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(count, 1); // only a.txt
-    }
-
-    #[test]
-    fn test_hidden_file_is_skipped() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "visible.txt", "hello");
-        write_file(&root_dir, ".hidden.txt", "secret");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_interrupted_job_marked_on_next_run() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        // Simulate a crashed previous job
-        let now = db::unix_now();
-        conn.execute(
-            "INSERT INTO index_jobs (root_id, status, index_marker, started_at, updated_at) VALUES (?1, 'running', 1, ?2, ?2)",
-            params![root.id, now],
-        ).unwrap();
-
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let interrupted: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM index_jobs WHERE status = 'interrupted'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(interrupted, 1);
-    }
-
-    // ── Phase C extraction integration tests ─────────────────────────────────
-
-    #[test]
-    fn test_txt_files_have_extracted_text_after_scan() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "notes.txt", "the quick brown fox jumps over the lazy dog");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let (text, model_ver): (String, String) = conn.query_row(
-            "SELECT extracted_text, model_version FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
-        assert!(!text.is_empty(), "extracted_text should be populated after scan");
-        assert_eq!(model_ver, "ext-v1", "model_version should be set after extraction");
-    }
-
-    #[test]
-    fn test_chunks_populated_for_txt_file() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        // Write enough content to produce at least one chunk.
-        write_file(&root_dir, "notes.txt", "word ".repeat(10).trim());
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let file_id: i64 = conn.query_row(
-            "SELECT id FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        let chunk_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
-            params![file_id],
-            |r| r.get(0),
-        ).unwrap();
-        assert!(chunk_count >= 1, "at least one chunk should be stored");
-    }
-
-    #[test]
-    fn test_second_scan_skips_extraction_for_unchanged_file() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        write_file(&root_dir, "a.txt", "stable content");
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        // Overwrite extracted_text to a sentinel so we can detect if re-extraction ran.
-        conn.execute(
-            "UPDATE files SET extracted_text = 'sentinel' WHERE root_id = ?1",
-            params![root.id],
-        ).unwrap();
-
-        // Second scan — file unchanged, should NOT re-extract.
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let text: String = conn.query_row(
-            "SELECT extracted_text FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(text, "sentinel", "extraction should not re-run for unchanged file");
-    }
-
-    #[test]
-    fn test_large_batch_completes_without_panic() {
-        let (tmp, conn) = setup_db();
-        let root_dir = tmp.path().join("root");
-        std::fs::create_dir(&root_dir).unwrap();
-        for i in 0..500 {
-            write_file(&root_dir, &format!("{i}.txt"), &format!("content {i}"));
-        }
-
-        let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-        run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
-
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
-            params![root.id],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(count, 500);
-    }
-}
+#[path = "indexer_test.rs"]
+mod tests;
