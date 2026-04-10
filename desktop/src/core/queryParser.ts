@@ -2,7 +2,10 @@ import type { SearchRequest } from './types';
 
 const MEDIA_TYPES = ['pdf', 'docx', 'xlsx', 'csv', 'txt', 'md', 'png', 'jpg', 'jpeg'];
 
-export function parseNaturalLanguageQuery(input: string): SearchRequest {
+export function parseNaturalLanguageQuery(
+  input: string,
+  mode: SearchRequest['mode'] = 'hybrid',
+): SearchRequest {
   const tokens = input.trim().split(/\s+/).filter(t => t.length > 0);
   const wordCount = tokens.length;
   const consumed = new Set<number>();
@@ -87,14 +90,18 @@ export function parseNaturalLanguageQuery(input: string): SearchRequest {
   const queryText = unresolvedTokens.join(' ') || input.trim();
   const unresolvedCount = unresolvedTokens.length;
 
+  // LLM fallback triggers only when ALL conditions hold per spec:
+  //   - mode is not "keyword" (keyword mode never uses LLM)
+  //   - query is long (>5 words)
+  //   - the deterministic pass left >3 tokens unresolved
   let parserConfidence: number;
-  if (wordCount <= 5) {
-    parserConfidence = 0.9;
-  } else if (unresolvedCount > 3) {
-    parserConfidence = 0.2;
+  if (mode !== 'keyword' && wordCount > 5 && unresolvedCount > 3) {
+    parserConfidence = 0.2; // needs LLM
+  } else if (wordCount <= 5) {
+    parserConfidence = 0.9; // short query — deterministic pass is sufficient
   } else {
-    parserConfidence = 0.8;
+    parserConfidence = 0.8; // long but mostly parsed, or keyword mode
   }
 
-  return { queryText, mediaTypes, rootScope, dateFrom, dateTo, minConfidence, parserConfidence };
+  return { queryText, mediaTypes, rootScope, dateFrom, dateTo, minConfidence, mode, parserConfidence };
 }
