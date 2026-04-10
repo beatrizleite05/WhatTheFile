@@ -4,7 +4,7 @@ use rusqlite::params;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use tauri::Emitter;
-use crate::{chunker, db, errors::AppError, extractor};
+use crate::{chunker, db, errors::AppError, extractor, llm};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -284,11 +284,30 @@ fn run_scan(
                     chunker::CHUNK_SIZE,
                     chunker::CHUNK_OVERLAP,
                 );
-                let chunk_pairs: Vec<(usize, &str)> = chunks
+
+                // Batch-embed all chunks in one Ollama round-trip.
+                // On failure (e.g. Ollama unreachable), store chunks without
+                // embeddings so the file is still text-searchable via FTS5.
+                let chunk_texts: Vec<&str> =
+                    chunks.iter().map(|c| c.text.as_str()).collect();
+                let embeddings_result =
+                    llm::embeddings::embed_texts(&chunk_texts, ollama_url);
+                let embedding_blobs: Vec<Option<Vec<u8>>> = match embeddings_result {
+                    Ok(vecs) => vecs
+                        .into_iter()
+                        .map(|v| Some(llm::embeddings::embedding_to_bytes(&v)))
+                        .collect(),
+                    Err(_) => vec![None; chunks.len()],
+                };
+
+                let chunk_pairs: Vec<(usize, &str, Option<&[u8]>)> = chunks
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| (i, c.text.as_str()))
+                    .map(|(i, c)| {
+                        (i, c.text.as_str(), embedding_blobs[i].as_deref())
+                    })
                     .collect();
+
                 db::update_file_content(
                     conn,
                     file_id,
@@ -325,6 +344,18 @@ fn run_scan(
         "filesDeleted": counts.files_deleted,
         "errorCount": counts.error_count,
     }));
+
+    // ── §4.3: explicit model unload after index completion ────────────────────
+    // Release VRAM immediately rather than waiting for the keep-alive window.
+    // Only unload models that were actually loaded (no need to unload if never used).
+    // The embedding model is always used during indexing (for all files that extract successfully).
+    // Vision models (qwen2.5vl:7b, llava:7b) are only used during image extraction.
+    // Errors are logged but do NOT fail the index run; Ollama downtime must not
+    // block indexing completion. Always attempt to unload the embedding model.
+    match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
+        Ok(()) => log::info!("unloaded embedding model (nomic-embed-text-v2-moe)"),
+        Err(e) => log::warn!("unload embedding model failed (will remain in VRAM): {e}"),
+    }
 
     Ok(job_id)
 }
