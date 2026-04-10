@@ -7,7 +7,7 @@ use crate::errors::AppError;
 pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .expect("system clock is before UNIX epoch — cannot compute timestamps")
         .as_secs() as i64
 }
 
@@ -153,6 +153,31 @@ CREATE TABLE IF NOT EXISTS activity_log (
 CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at DESC);
 "#;
 
+const MIGRATION_002: &str = r#"
+ALTER TABLE chunks ADD COLUMN embedding BLOB;
+UPDATE schema_version SET version = 2;
+"#;
+
+/// Introduce the sqlite-vec KNN virtual table.
+/// Migrates existing embeddings from chunks.embedding → chunks_vec, then
+/// drops the now-redundant BLOB column (requires SQLite 3.35+, bundled).
+///
+/// FLOAT[768]: nomic-embed-text-v2-moe outputs 768-dim by architecture.
+/// Must stay in sync with `llm::embeddings::EXPECTED_DIM`.
+const MIGRATION_003: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
+  chunk_id  INTEGER PRIMARY KEY,
+  embedding FLOAT[768]
+);
+
+INSERT OR IGNORE INTO chunks_vec(chunk_id, embedding)
+SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL;
+
+ALTER TABLE chunks DROP COLUMN embedding;
+
+UPDATE schema_version SET version = 3;
+"#;
+
 pub(crate) fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
@@ -160,16 +185,39 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     let version: Option<i64> = conn
         .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0))
         .optional()?;
-    if version.is_none() {
-        conn.execute_batch(MIGRATION_001)?;
-        conn.execute("INSERT INTO schema_version VALUES (1)", [])?;
+    match version {
+        None => {
+            conn.execute_batch(MIGRATION_001)?;
+            conn.execute("INSERT INTO schema_version VALUES (1)", [])?;
+            conn.execute_batch(MIGRATION_002)?;
+            conn.execute_batch(MIGRATION_003)?;
+        }
+        Some(1) => {
+            conn.execute_batch(MIGRATION_002)?;
+            conn.execute_batch(MIGRATION_003)?;
+        }
+        Some(2) => {
+            conn.execute_batch(MIGRATION_003)?;
+        }
+        Some(_) => {}
     }
     Ok(())
 }
 
 pub fn open_and_migrate(path: &Path) -> Result<Connection, AppError> {
+    // Register sqlite-vec for every subsequent connection opened in this process.
+    // sqlite3_auto_extension deduplicates by function pointer, so repeated calls
+    // are a no-op.  Must run before Connection::open so the extension is live
+    // before run_migrations tries to CREATE VIRTUAL TABLE … USING vec0.
+    unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(
+            std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ()),
+        ));
+    }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
     }
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -198,7 +246,7 @@ pub fn insert_root(conn: &Connection, path: &str) -> Result<Root, AppError> {
     let label = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
+        .ok_or_else(|| AppError::Config(format!("root path has no valid filename component: {path}")))?
         .to_string();
     let now = unix_now();
     conn.execute(
@@ -505,16 +553,29 @@ pub fn update_file_content(
 pub fn replace_chunks(
     conn: &Connection,
     file_id: i64,
-    chunks: &[(usize, &str)],
+    chunks: &[(usize, &str, Option<&[u8]>)],
 ) -> Result<(), AppError> {
     conn.execute_batch("SAVEPOINT replace_chunks")?;
     let result = (|| -> Result<(), AppError> {
+        // Delete from chunks_vec first (no cascade from chunks virtual table).
+        conn.execute(
+            "DELETE FROM chunks_vec WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id = ?1)",
+            params![file_id],
+        )?;
         conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
-        let mut stmt = conn.prepare(
+
+        let mut chunk_stmt = conn.prepare(
             "INSERT INTO chunks (file_id, chunk_index, text) VALUES (?1, ?2, ?3)",
         )?;
-        for (idx, text) in chunks {
-            stmt.execute(params![file_id, *idx as i64, text])?;
+        let mut vec_stmt = conn.prepare(
+            "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+        )?;
+        for (idx, text, emb) in chunks {
+            chunk_stmt.execute(params![file_id, *idx as i64, text])?;
+            if let Some(emb_bytes) = emb {
+                let chunk_id = conn.last_insert_rowid();
+                vec_stmt.execute(params![chunk_id, emb_bytes])?;
+            }
         }
         Ok(())
     })();
@@ -557,28 +618,32 @@ mod tests {
     use super::*;
 
     fn setup() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        conn
+        open_and_migrate(std::path::Path::new(":memory:")).unwrap()
     }
 
     #[test]
     fn test_migrations_run_on_fresh_db() {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
+        let conn = setup();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('roots','files','chunks','index_jobs','activity_log')",
             [],
             |r| r.get(0),
         ).unwrap();
         assert_eq!(count, 5);
+        // chunks_vec is a virtual table — verify it exists too
+        let vec_exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chunks_vec'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(vec_exists, 1);
     }
 
     #[test]
     fn test_migrations_are_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = setup();
+        // Running migrations again on a v3 DB must be a no-op.
         run_migrations(&conn).unwrap();
-        run_migrations(&conn).unwrap(); // must not fail
     }
 
     #[test]
@@ -880,7 +945,7 @@ mod tests {
             &conn, root.id, "a.txt", "a.txt", "txt",
             100, 1000, "fp", "", 1, now,
         ).unwrap();
-        let chunks = vec![(0usize, "chunk zero"), (1, "chunk one"), (2, "chunk two")];
+        let chunks = vec![(0usize, "chunk zero", None), (1, "chunk one", None), (2, "chunk two", None)];
         replace_chunks(&conn, id, &chunks).unwrap();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
@@ -899,9 +964,9 @@ mod tests {
             &conn, root.id, "a.txt", "a.txt", "txt",
             100, 1000, "fp", "", 1, now,
         ).unwrap();
-        replace_chunks(&conn, id, &[(0, "old chunk a"), (1, "old chunk b")]).unwrap();
+        replace_chunks(&conn, id, &[(0, "old chunk a", None), (1, "old chunk b", None)]).unwrap();
         // Re-index: new extraction produces only one chunk
-        replace_chunks(&conn, id, &[(0, "new single chunk")]).unwrap();
+        replace_chunks(&conn, id, &[(0, "new single chunk", None)]).unwrap();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM chunks WHERE file_id = ?1",
             params![id],
@@ -925,7 +990,7 @@ mod tests {
             &conn, root.id, "a.txt", "a.txt", "txt",
             100, 1000, "fp", "", 1, now,
         ).unwrap();
-        replace_chunks(&conn, id, &[(0, "chunk")]).unwrap();
+        replace_chunks(&conn, id, &[(0, "chunk", None)]).unwrap();
         // Hard-delete the file (bypassing soft-delete, for test purposes)
         conn.execute("DELETE FROM files WHERE id = ?1", params![id]).unwrap();
         let count: i64 = conn.query_row(
@@ -993,5 +1058,69 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_migration_003_schema_version_and_no_embedding_column() {
+        let conn = setup();
+        // After all migrations, chunks must NOT have an embedding column.
+        let cols: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(chunks)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert!(!cols.contains(&"embedding".to_string()), "embedding column must be dropped by migration 003");
+        let version: i64 = conn.query_row(
+            "SELECT version FROM schema_version LIMIT 1", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(version, 3);
+    }
+
+    #[test]
+    fn test_chunks_vec_stores_embedding() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "a.txt", "a.txt", "txt", 100, 1000, "fp", "", 1, now,
+        ).unwrap();
+        // 768-dim embedding
+        let emb: Vec<u8> = (0..768_u32)
+            .flat_map(|i| (i as f32 * 0.01).to_le_bytes())
+            .collect();
+        replace_chunks(&conn, id, &[(0, "hello", Some(emb.as_slice()))]).unwrap();
+        // Embedding must be in chunks_vec, not chunks.
+        let chunk_id: i64 = conn.query_row(
+            "SELECT id FROM chunks WHERE file_id = ?1 AND chunk_index = 0",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks_vec WHERE chunk_id = ?1",
+            params![chunk_id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1, "embedding must be stored in chunks_vec");
+    }
+
+    #[test]
+    fn test_replace_chunks_clears_chunks_vec_on_update() {
+        let conn = setup();
+        let root = insert_test_root(&conn);
+        let now = unix_now();
+        let id = upsert_file_metadata(
+            &conn, root.id, "b.txt", "b.txt", "txt", 100, 1000, "fp2", "", 1, now,
+        ).unwrap();
+        let emb: Vec<u8> = vec![0.0_f32; 768].iter().flat_map(|f| f.to_le_bytes()).collect();
+        replace_chunks(&conn, id, &[(0, "first", Some(emb.as_slice()))]).unwrap();
+        // Re-index with new content (no embedding this time).
+        replace_chunks(&conn, id, &[(0, "second", None)]).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM chunks_vec cv JOIN chunks c ON c.id = cv.chunk_id WHERE c.file_id = ?1",
+            params![id],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 0, "old chunks_vec entry must be removed on re-index");
     }
 }
