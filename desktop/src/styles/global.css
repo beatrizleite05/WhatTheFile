@@ -1,0 +1,84 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-system);
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* Allow text selection in inputs and text content */
+input,
+textarea,
+[data-selectable] {
+  user-select: text;
+}
+
+/* Drag region: top strip of frameless window */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  cursor: default;
+}
+
+/* Interactive elements must opt out of drag */
+button,
+input,
+a,
+[role='button'],
+[role='listbox'],
+[role='option'] {
+  -webkit-app-region: no-drag;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* Glassmorphism container */
+.glass {
+  background: var(--surface-bg);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--surface-shadow);
+  border-radius: var(--radius-container);
+}
+
+/* Solid settings background */
+.solid-bg {
+  background: var(--surface-bg-solid);
+  border-radius: var(--radius-container);
+}

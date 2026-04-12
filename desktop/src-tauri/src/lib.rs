@@ -39,6 +39,9 @@ pub fn run() {
             search,
             start_indexing,
             add_root,
+            list_roots,
+            remove_root,
+            delete_index,
             open_file,
             get_runtime_status,
         ])
@@ -55,6 +58,53 @@ async fn add_root(
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
         config::add_root(&conn, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_roots(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<RootPayload>, String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        config::list_roots(&conn).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn remove_root(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<(), String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        conn.execute("UPDATE roots SET active = 0 WHERE id = ?1", [id])
+            .map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn delete_index(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "DELETE FROM files;
+             DELETE FROM index_jobs;",
+        )
+        .map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -91,8 +141,29 @@ async fn search(
 }
 
 #[tauri::command]
-async fn open_file(_path: String) -> Result<(), String> {
-    todo!("Phase E: implement open_file command")
+async fn open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

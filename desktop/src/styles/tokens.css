@@ -1,0 +1,73 @@
+:root {
+  /* Surface / Glassmorphism */
+  --surface-bg: rgba(9, 9, 11, 0.72);
+  --surface-border: rgba(255, 255, 255, 0.10);
+  --surface-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --surface-blur: blur(48px);
+  --surface-bg-solid: #0c0c0e;
+
+  /* Radius */
+  --radius-container: 20px;
+  --radius-element: 8px;
+  --radius-pill: 999px;
+
+  /* Accent / Selection */
+  --accent: #5e6ad2;
+  --accent-hover: #6b78e0;
+  --selection-bg: rgba(94, 106, 210, 0.15);
+  --selection-border: rgba(94, 106, 210, 0.35);
+
+  /* Text */
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.52);
+  --text-tertiary: rgba(255, 255, 255, 0.28);
+  --text-placeholder: rgba(255, 255, 255, 0.22);
+
+  /* Fonts */
+  --font-system: -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+
+  /* Font sizes */
+  --font-size-xs: 11px;
+  --font-size-sm: 12.5px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-input: 15px;
+
+  /* Spacing (8-point grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Divider */
+  --divider: rgba(255, 255, 255, 0.07);
+
+  /* Pill colors per query token type */
+  --pill-pdf-bg: rgba(239, 68, 68, 0.18);
+  --pill-pdf-text: #fca5a5;
+  --pill-image-bg: rgba(34, 197, 94, 0.18);
+  --pill-image-text: #86efac;
+  --pill-doc-bg: rgba(59, 130, 246, 0.18);
+  --pill-doc-text: #93c5fd;
+  --pill-sheet-bg: rgba(234, 179, 8, 0.18);
+  --pill-sheet-text: #fde047;
+  --pill-text-bg: rgba(255, 255, 255, 0.09);
+  --pill-text-text: rgba(255, 255, 255, 0.60);
+  --pill-date-bg: rgba(168, 85, 247, 0.18);
+  --pill-date-text: #d8b4fe;
+  --pill-scope-bg: rgba(20, 184, 166, 0.18);
+  --pill-scope-text: #5eead4;
+  --pill-confidence-bg: rgba(251, 146, 60, 0.18);
+  --pill-confidence-text: #fdba74;
+
+  /* Status colors */
+  --status-warning-bg: rgba(234, 179, 8, 0.14);
+  --status-warning-text: #fde047;
+  --status-warning-border: rgba(234, 179, 8, 0.25);
+  --status-error-bg: rgba(239, 68, 68, 0.14);
+  --status-error-text: #fca5a5;
+}

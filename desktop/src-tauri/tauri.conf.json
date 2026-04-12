@@ -12,13 +12,31 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "WhatTheFile",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
+        "width": 680,
+        "height": 560,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "center": true,
+        "visible": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "settings",
+        "title": "WhatTheFile \u2014 Settings",
+        "url": "settings.html",
+        "width": 640,
+        "height": 520,
+        "resizable": false,
+        "decorations": true,
+        "visible": false
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

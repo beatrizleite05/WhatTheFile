@@ -1,9 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { RootPayload } from './settings';
 
-export async function startIndexing(rootPath: string): Promise<void> {
-  return invoke('start_indexing', { rootPath });
+export async function addRoot(path: string): Promise<RootPayload> {
+  return invoke<RootPayload>('add_root', { path });
 }
 
-export async function addRoot(path: string): Promise<void> {
-  return invoke('add_root', { path });
+export async function startIndexing(rootId: number): Promise<number> {
+  return invoke<number>('start_indexing', { rootId });
 }
