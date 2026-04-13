@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { FolderOpen, Shield, AlertTriangle } from 'lucide-react';
+import { documentDir, desktopDir, downloadDir, pictureDir } from '@tauri-apps/api/path';
 import { fadeSlide } from '../styles/animations';
 import type { useSettings } from '../hooks/useSettings';
 
@@ -11,38 +12,35 @@ interface OnboardingFlowProps {
   settings: SettingsHook;
 }
 
-const PRESETS = [
-  { label: 'Documents', pathSuffix: 'Documents' },
-  { label: 'Desktop', pathSuffix: 'Desktop' },
-  { label: 'Downloads', pathSuffix: 'Downloads' },
-  { label: 'Pictures', pathSuffix: 'Pictures' },
+const PRESETS: { label: string; resolver: () => Promise<string> }[] = [
+  { label: 'Documents', resolver: documentDir },
+  { label: 'Desktop',   resolver: desktopDir  },
+  { label: 'Downloads', resolver: downloadDir },
+  { label: 'Pictures',  resolver: pictureDir  },
 ];
-
-function getHomePath(): string {
-  // In the browser/Tauri context, home dir is approximated
-  return typeof window !== 'undefined' && navigator.platform.includes('Win')
-    ? `C:\\Users\\${import.meta.env.VITE_USER ?? 'user'}`
-    : `/Users/${import.meta.env.VITE_USER ?? 'user'}`;
-}
 
 export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
   const [step, setStep] = useState<'folders' | 'privacy'>('folders');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  function togglePreset(suffix: string) {
+  function togglePreset(label: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(suffix)) next.delete(suffix);
-      else next.add(suffix);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
       return next;
     });
   }
 
   async function handleGetStarted() {
-    const home = getHomePath();
-    for (const suffix of selected) {
-      const sep = home.includes('\\') ? '\\' : '/';
-      await settings.addRoot(`${home}${sep}${suffix}`);
+    for (const preset of PRESETS) {
+      if (!selected.has(preset.label)) continue;
+      try {
+        const path = await preset.resolver();
+        await settings.addRoot(path);
+      } catch {
+        // If the OS directory doesn't exist, skip it silently.
+      }
     }
     onComplete();
   }
@@ -86,9 +84,9 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {PRESETS.map(({ label, pathSuffix }) => (
+            {PRESETS.map(({ label }) => (
               <label
-                key={pathSuffix}
+                key={label}
                 aria-label={label}
                 style={{
                   display: 'flex',
@@ -96,16 +94,16 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
                   gap: 10,
                   padding: '10px 14px',
                   borderRadius: 'var(--radius-element)',
-                  background: selected.has(pathSuffix) ? 'var(--selection-bg)' : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${selected.has(pathSuffix) ? 'var(--selection-border)' : 'var(--surface-border)'}`,
+                  background: selected.has(label) ? 'var(--selection-bg)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${selected.has(label) ? 'var(--selection-border)' : 'var(--surface-border)'}`,
                   cursor: 'pointer',
                   userSelect: 'none',
                 }}
               >
                 <input
                   type="checkbox"
-                  checked={selected.has(pathSuffix)}
-                  onChange={() => togglePreset(pathSuffix)}
+                  checked={selected.has(label)}
+                  onChange={() => togglePreset(label)}
                   aria-label={label}
                   style={{ width: 14, height: 14, accentColor: 'var(--accent)' }}
                 />
