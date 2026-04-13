@@ -211,11 +211,13 @@ pub fn search_files(
         .join(", ");
 
     let sql = format!(
-        "SELECT f.id, f.root_id, f.rel_path, f.filename, f.media_type,
+        "SELECT f.id, f.root_id, r.path, f.rel_path, f.filename, f.media_type,
                 f.size_bytes, f.indexed_at, f.confidence, f.mtime_ns, f.extracted_text
          FROM files f
+         JOIN roots r ON r.id = f.root_id
          WHERE f.id IN ({placeholders})
-           AND f.deleted_at IS NULL"
+           AND f.deleted_at IS NULL
+           AND r.active = 1"
     );
 
     let mut results: Vec<FileSearchResult> = {
@@ -229,11 +231,12 @@ pub fn search_files(
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
                     r.get::<_, String>(4)?,
-                    r.get::<_, i64>(5)?,
+                    r.get::<_, String>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, f32>(7)?,
-                    r.get::<_, i64>(8)?,
-                    r.get::<_, String>(9)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, f32>(8)?,
+                    r.get::<_, i64>(9)?,
+                    r.get::<_, String>(10)?,
                 ))
             },
         )?;
@@ -247,7 +250,7 @@ pub fn search_files(
 
         let mut out = Vec::new();
         for row in rows {
-            let (file_id, root_id, rel_path, filename, media_type,
+            let (file_id, root_id, root_path, rel_path, filename, media_type,
                  size_bytes, indexed_at, confidence, mtime_ns, extracted_text) = row?;
 
             if !query.media_types.is_empty()
@@ -275,10 +278,15 @@ pub fn search_files(
             let best_chunk_id = vec_map.get(&file_id).map(|&(_, cid)| cid);
             let snippet = build_snippet(conn, best_chunk_id, &extracted_text);
 
+            let abs_path = std::path::Path::new(&root_path)
+                .join(&rel_path)
+                .to_string_lossy()
+                .into_owned();
+
             out.push(FileSearchResult {
                 file_id,
                 root_id,
-                path: rel_path,
+                path: abs_path,
                 filename,
                 media_type,
                 size_bytes,
