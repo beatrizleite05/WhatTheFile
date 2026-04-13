@@ -5,7 +5,8 @@ import { ResultGrid, type ResultGridHandle } from './ResultGrid';
 import { PreviewPane } from './PreviewPane';
 import { OllamaBanner } from './OllamaBanner';
 import { IndexingProgress } from './IndexingProgress';
-import { openFile } from '../api/runtime';
+import { Settings } from 'lucide-react';
+import { openFile, openSettings } from '../api/runtime';
 import type { UseSearchReturn } from '../hooks/useSearch';
 import type { UseIndexingReturn } from '../hooks/useIndexing';
 import type { UseOllamaStatusReturn } from '../hooks/useOllamaStatus';
@@ -62,11 +63,30 @@ export function FramelessOverlay({ search, indexing, ollamaStatus }: FramelessOv
         overflow: 'hidden',
       }}
     >
-      {/* Drag region — no interactive children inside */}
-      <div
-        data-tauri-drag-region
-        style={{ height: 28, flexShrink: 0, cursor: 'default' }}
-      />
+      {/* Drag region — gear button sits outside the drag surface */}
+      <div style={{ position: 'relative', height: 28, flexShrink: 0 }}>
+        <div data-tauri-drag-region style={{ position: 'absolute', inset: 0, cursor: 'default' }} />
+        <button
+          aria-label="Open settings"
+          onClick={() => openSettings().catch(() => {})}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openSettings().catch(() => {}); }}
+          style={{
+            position: 'absolute',
+            right: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 4,
+            color: 'var(--text-tertiary)',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <Settings size={14} />
+        </button>
+      </div>
 
       <OllamaBanner reachable={ollamaStatus.reachable} modelsLoaded={ollamaStatus.modelsLoaded} />
 
