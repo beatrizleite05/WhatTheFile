@@ -43,6 +43,16 @@ tempfile = "3"
 # In release builds this assertion is already compiled out; disabling it in dev
 # restores the same behaviour — wry simply skips the missing method, which is
 # harmless for a file-search app that never uses media capture.
+#
+# IMPORTANT: the debug_assert! inside declare_class! expands in the *calling*
+# crate's compilation unit, not in objc2 itself.  WryWebView is declared in wry
+# and ObjC delegates in tao, so all three crates need the override.
 # Upstream: https://github.com/tauri-apps/tauri/issues/11496
 [profile.dev.package.objc2]
+debug-assertions = false
+
+[profile.dev.package.wry]
+debug-assertions = false
+
+[profile.dev.package.tao]
 debug-assertions = false
