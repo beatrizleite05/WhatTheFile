@@ -142,28 +142,7 @@ async fn search(
 
 #[tauri::command]
 async fn open_file(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    platform::open_file(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

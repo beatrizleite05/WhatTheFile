@@ -1,6 +1,32 @@
 use crate::errors::AppError;
 use std::path::PathBuf;
 
+/// Open a file or directory with the OS default application.
+pub fn open_file(path: &str) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(AppError::Io)?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(AppError::Io)?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(AppError::Io)?;
+    }
+    Ok(())
+}
+
 pub fn app_data_dir() -> Result<PathBuf, AppError> {
     todo!("platform-specific: ~/Library/Application Support/WhatTheFile (mac) or %LOCALAPPDATA%\\WhatTheFile (win)")
 }
