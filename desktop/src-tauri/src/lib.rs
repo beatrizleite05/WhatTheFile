@@ -21,6 +21,17 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             use tauri::Manager;
+
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or("main window not found")?;
+                apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, Some(12.0))
+                    .map_err(|e| e.to_string())?;
+            }
+
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(app_data.join("db"))?;
             let db_path = app_data.join("db").join("index.sqlite");
