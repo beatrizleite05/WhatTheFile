@@ -219,7 +219,7 @@ impl<T> EventLoop<T> {
 
     self._callback = Some(Rc::clone(&callback));
 
-    let mtm = MainThreadMarker::new().unwrap();
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
     let exit_code = unsafe {
       let _pool = NSAutoreleasePool::new();

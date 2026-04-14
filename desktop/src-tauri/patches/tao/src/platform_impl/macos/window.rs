@@ -1690,13 +1690,13 @@ impl WindowExtMacOS for UnownedWindow {
 
   #[inline]
   fn set_allows_automatic_window_tabbing(&self, enabled: bool) {
-    let mtm = MainThreadMarker::new().unwrap();
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
     NSWindow::setAllowsAutomaticWindowTabbing(enabled, mtm)
   }
 
   #[inline]
   fn allows_automatic_window_tabbing(&self) -> bool {
-    let mtm = MainThreadMarker::new().unwrap();
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
     NSWindow::allowsAutomaticWindowTabbing(mtm)
   }
 

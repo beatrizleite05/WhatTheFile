@@ -464,7 +464,11 @@ unsafe fn window_activation_hack(ns_app: &NSApplication) {
 }
 fn apply_activation_policy(app_delegate: &Object) {
   unsafe {
-    let mtm = MainThreadMarker::new().unwrap();
+    // SAFETY: apply_activation_policy is only called from launched(), which
+    // runs inside applicationDidFinishLaunching: (always on main thread).
+    // On macOS 26 (Tahoe), MainThreadMarker::new() incorrectly returns None
+    // during early app startup — see tao#1171.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let ns_app = NSApp(mtm);
     // We need to delay setting the activation policy and activating the app
     // until `applicationDidFinishLaunching` has been called. Otherwise the
