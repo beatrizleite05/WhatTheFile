@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["devtools", "macos-private-api"] }
 window-vibrancy = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -57,6 +57,9 @@ tempfile = "3"
 #          causing Tauri's setup() to fail and panic!("Failed to setup app")
 # Both patches replace the affected call sites with new_unchecked() (safe: all sites
 # are provably on the main thread). Upstream: https://github.com/tauri-apps/tao/issues/1171
+# Additional compatibility tweaks for macOS 26:
+#   - tao app delegate launch callback uses extern "C-unwind"
+#   - objc2 feature "relax-sign-encoding" is enabled in patched tao/wry
 # Remove this patch section once both crates have upstream fixes.
 [patch.crates-io]
 tao = { path = "patches/tao" }

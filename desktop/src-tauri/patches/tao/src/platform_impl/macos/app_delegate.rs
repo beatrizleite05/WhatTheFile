@@ -57,7 +57,7 @@ pub static APP_DELEGATE_CLASS: Lazy<AppDelegateClass> = Lazy::new(|| unsafe {
 
   decl.add_method(
     sel!(applicationDidFinishLaunching:),
-    did_finish_launching as extern "C" fn(_, _, _),
+    did_finish_launching as extern "C-unwind" fn(_, _, _),
   );
   decl.add_method(
     sel!(applicationWillTerminate:),
@@ -122,7 +122,7 @@ extern "C" fn dealloc(this: &Object, _: Sel) {
   }
 }
 
-extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
+extern "C-unwind" fn did_finish_launching(this: &Object, _: Sel, _: id) {
   trace!("Triggered `applicationDidFinishLaunching`");
   AppState::launched(this);
   trace!("Completed `applicationDidFinishLaunching`");

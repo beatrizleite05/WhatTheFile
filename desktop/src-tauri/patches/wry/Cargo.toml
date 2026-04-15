@@ -346,6 +346,7 @@ version = "0.6.4"
 features = [
     "exception",
     "disable-encoding-assertions",
+    "relax-sign-encoding",
 ]
 
 [target.'cfg(target_vendor = "apple")'.dependencies.objc2-core-foundation]

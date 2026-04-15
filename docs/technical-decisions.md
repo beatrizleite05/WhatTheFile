@@ -254,3 +254,33 @@ Short queries and queries where most tokens were consumed deterministically neve
 - Adds ~200–800ms + requires Ollama available — the cost justifies a high bar
 
 LLM is never called in `mode: 'keyword'` — user explicitly wants lexical matching, no inference.
+
+---
+
+## 14. macOS 26 Startup Stability — Tao/Wry Patch Set
+
+On macOS 26 (Tahoe), app startup crashed during `applicationDidFinishLaunching` with:
+
+- `panic in a function that cannot unwind`
+- `fatal runtime error: Rust cannot catch foreign exceptions, aborting`
+
+Crash site was consistently in Tao app delegate launch callback.
+
+**Locked workaround for current pinned versions (`tao 0.34.8`, `wry 0.54.4`):**
+
+- Enable `app.macOSPrivateApi = true` in Tauri config when using transparent windows.
+- Enable Tauri Rust feature `macos-private-api`.
+- In patched Tao, use `extern "C-unwind"` for `applicationDidFinishLaunching` callback registration/signature.
+- Enable objc2 `relax-sign-encoding` for patched Tao and Wry Apple targets.
+
+These changes are constrained to local patched crates under `desktop/src-tauri/patches/` and Tauri app config.
+
+**Why this is acceptable for v1:**
+
+- Resolves launch abort on supported dev hardware/OS.
+- Keeps transparent + vibrancy UI behavior intact.
+- Isolated and reversible once upstream releases include equivalent fixes.
+
+**Removal condition:**
+
+Drop local patch overrides after upgrading to upstream Tao/Wry versions that boot cleanly on macOS 26 without these modifications.
