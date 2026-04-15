@@ -49,14 +49,18 @@ tempfile = "3"
 # crate's compilation unit, not in objc2 itself.  WryWebView is declared in wry
 # and ObjC delegates in tao, so all three crates need the override.
 # Upstream: https://github.com/tauri-apps/tauri/issues/11496
-# tao 0.34.8 crashes on macOS 26 (Tahoe) because MainThreadMarker::new().unwrap()
-# returns None during applicationDidFinishLaunching: — the OS changed when the
-# main thread marker is considered valid. This local patch replaces the three
-# call sites with new_unchecked() (safe: all sites are provably on the main thread).
-# Upstream: https://github.com/tauri-apps/tao/issues/1171
-# Remove this patch section once tauri-runtime-wry is compatible with tao >=0.35.0.
+# tao 0.34.8 and wry 0.54.4 both crash on macOS 26 (Tahoe) because
+# MainThreadMarker::new() incorrectly returns None during applicationDidFinishLaunching:
+# — the OS changed when the main thread marker is considered valid.
+#   - tao: MainThreadMarker::new().unwrap() panics in app_state.rs, event_loop.rs, window.rs
+#   - wry: MainThreadMarker::new().ok_or(NotMainThread)? returns Err in new_ns_view,
+#          causing Tauri's setup() to fail and panic!("Failed to setup app")
+# Both patches replace the affected call sites with new_unchecked() (safe: all sites
+# are provably on the main thread). Upstream: https://github.com/tauri-apps/tao/issues/1171
+# Remove this patch section once both crates have upstream fixes.
 [patch.crates-io]
 tao = { path = "patches/tao" }
+wry = { path = "patches/wry" }
 
 [profile.dev.package.objc2]
 debug-assertions = false
