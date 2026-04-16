@@ -68,13 +68,15 @@ a,
 }
 
 /* Glassmorphism container */
+/* border-radius is intentionally absent: apply_vibrancy handles OS-level
+   window rounding (12 px). Adding border-radius here clips the background
+   but not the content, making elements appear outside the dark area. */
 .glass {
   background: var(--surface-bg);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
   border: 1px solid var(--surface-border);
   box-shadow: var(--surface-shadow);
-  border-radius: var(--radius-container);
 }
 
 /* Solid settings background */

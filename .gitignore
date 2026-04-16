@@ -8,6 +8,7 @@ desktop/src-tauri/target/
 CLAUDE.md
 docs/superpowers/
 .worktrees/
+.playwright-mcp/
 desktop/src-tauri/gen/
 desktop/src-tauri/libpdfium.dylib
 desktop/src-tauri/libpdfium.so

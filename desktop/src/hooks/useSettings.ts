@@ -53,7 +53,7 @@ export function useSettings(): SettingsState {
     try {
       const root = await apiAddRoot(path);
       setRoots((prev) => [...prev, root]);
-      await startIndexing(root.id);
+      startIndexing(root.id).catch((e) => setError(errorMessage(e)));
     } catch (e) {
       setError(errorMessage(e));
     }

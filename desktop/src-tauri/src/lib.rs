@@ -22,15 +22,31 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
 
+            let main_window = app
+                .get_webview_window("main")
+                .ok_or("main window not found")?;
+
             #[cfg(target_os = "macos")]
             {
                 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-                let window = app
-                    .get_webview_window("main")
-                    .ok_or("main window not found")?;
-                apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, Some(12.0))
+                apply_vibrancy(&main_window, NSVisualEffectMaterial::HudWindow, None, Some(12.0))
                     .map_err(|e| e.to_string())?;
             }
+
+            // Spotlight behaviour: hide the main window when it loses focus,
+            // unless focus moved to the settings window.
+            let win = main_window.clone();
+            let app_handle = app.handle().clone();
+            main_window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    if let Some(settings) = app_handle.get_webview_window("settings") {
+                        if settings.is_focused().unwrap_or(false) {
+                            return;
+                        }
+                    }
+                    let _ = win.hide();
+                }
+            });
 
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(app_data.join("db"))?;
