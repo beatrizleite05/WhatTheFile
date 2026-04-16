@@ -7,10 +7,20 @@ const KNOWN_MODELS: &[&str] = &["nomic-embed-text-v2-moe", "qwen2.5vl:7b", "llav
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(120))
         .build()
 }
 
+/// Lightweight agent for health checks — short timeouts so the UI
+/// doesn't stall waiting for a busy or slow Ollama instance.
+fn health_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(2))
+        .timeout_read(std::time::Duration::from_secs(3))
+        .build()
+}
+
+#[allow(dead_code)]
 fn get_tags(ollama_url: &str) -> Result<serde_json::Value, AppError> {
     let url = format!("{ollama_url}/api/tags");
     agent()
@@ -22,7 +32,8 @@ fn get_tags(ollama_url: &str) -> Result<serde_json::Value, AppError> {
 }
 
 pub fn check_ollama(ollama_url: &str) -> Result<bool, AppError> {
-    Ok(get_tags(ollama_url).is_ok())
+    let url = format!("{ollama_url}/api/tags");
+    Ok(health_agent().get(&url).call().is_ok())
 }
 
 /// Returns models currently loaded in Ollama VRAM via `/api/ps`.
@@ -45,6 +56,7 @@ pub fn list_loaded_models(ollama_url: &str) -> Result<Vec<String>, AppError> {
     Ok(names)
 }
 
+#[allow(dead_code)]
 pub fn ensure_model_loaded(model: &str, ollama_url: &str) -> Result<(), AppError> {
     let json = get_tags(ollama_url)?;
     let loaded = json["models"]

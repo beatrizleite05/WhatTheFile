@@ -27,10 +27,12 @@ pub fn open_file(path: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn app_data_dir() -> Result<PathBuf, AppError> {
     todo!("platform-specific: ~/Library/Application Support/WhatTheFile (mac) or %LOCALAPPDATA%\\WhatTheFile (win)")
 }
 
+#[allow(dead_code)]
 pub fn copy_to_clipboard(_text: &str) -> Result<(), AppError> {
     todo!("platform-specific clipboard write")
 }

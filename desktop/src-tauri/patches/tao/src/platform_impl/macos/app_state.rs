@@ -290,7 +290,7 @@ impl AppState {
       // which are called on the main thread. On macOS 26 (Tahoe),
       // MainThreadMarker::new() incorrectly returns None during early app
       // startup (tao issue #1171), so we bypass the check here.
-      let mtm = unsafe { MainThreadMarker::new_unchecked() };
+      let mtm = MainThreadMarker::new_unchecked();
       let ns_app = NSApp(mtm);
       window_activation_hack(&ns_app);
       let ignore = get_aux_state_mut(app_delegate).activate_ignoring_other_apps;
@@ -412,7 +412,7 @@ impl AppState {
       // which are called on the main thread. On macOS 26 (Tahoe),
       // MainThreadMarker::new() incorrectly returns None during early app
       // startup (tao issue #1171), so we bypass the check here.
-      let mtm = unsafe { MainThreadMarker::new_unchecked() };
+      let mtm = MainThreadMarker::new_unchecked();
         let app = NSApp(mtm);
         let _pool = NSAutoreleasePool::new();
         let () = msg_send![&app, stop: nil];
@@ -468,7 +468,7 @@ fn apply_activation_policy(app_delegate: &Object) {
     // runs inside applicationDidFinishLaunching: (always on main thread).
     // On macOS 26 (Tahoe), MainThreadMarker::new() incorrectly returns None
     // during early app startup — see tao#1171.
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let mtm = MainThreadMarker::new_unchecked();
     let ns_app = NSApp(mtm);
     // We need to delay setting the activation policy and activating the app
     // until `applicationDidFinishLaunching` has been called. Otherwise the

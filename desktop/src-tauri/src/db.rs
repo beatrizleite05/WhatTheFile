@@ -35,6 +35,7 @@ pub struct Root {
     pub last_indexed_at: Option<i64>,
 }
 
+#[allow(dead_code)]
 pub struct FileRecord {
     pub id: i64,
     pub root_id: i64,

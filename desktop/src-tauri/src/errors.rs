@@ -10,10 +10,12 @@ pub enum AppError {
     Extractor(String),
     #[error("LLM error: {0}")]
     Llm(String),
+    #[allow(dead_code)]
     #[error("search error: {0}")]
     Search(String),
     #[error("config error: {0}")]
     Config(String),
+    #[allow(dead_code)]
     #[error("tauri error: {0}")]
     Tauri(String),
     #[error("I/O error: {0}")]

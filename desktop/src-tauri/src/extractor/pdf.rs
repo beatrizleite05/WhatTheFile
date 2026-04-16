@@ -26,8 +26,6 @@ pub(super) fn pdfium_instance() -> Result<pdfium_render::prelude::Pdfium, AppErr
 }
 
 pub(super) fn extract_pdf(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
-    use pdfium_render::prelude::*;
-
     let path_str = path.to_str().ok_or_else(|| {
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;

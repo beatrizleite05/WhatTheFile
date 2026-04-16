@@ -5,7 +5,8 @@
 use crate::icon::{BadIcon, RgbaIcon};
 
 #[derive(Debug, Clone)]
-pub struct PlatformIcon(RgbaIcon);
+#[allow(dead_code)]
+pub struct PlatformIcon(pub(crate) RgbaIcon);
 
 impl PlatformIcon {
   pub fn from_rgba(rgba: Vec<u8>, width: u32, height: u32) -> Result<Self, BadIcon> {

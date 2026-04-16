@@ -1,6 +1,7 @@
 pub const CHUNK_SIZE: usize = 256;
 pub const CHUNK_OVERLAP: usize = 32;
 
+#[allow(dead_code)]
 pub struct Chunk {
     pub start_token: usize,
     pub end_token: usize,
