@@ -4,6 +4,7 @@ import { SearchBar } from './SearchBar';
 import { ResultGrid, type ResultGridHandle } from './ResultGrid';
 import { PreviewPane } from './PreviewPane';
 import { OllamaBanner } from './OllamaBanner';
+import { SkipWarningBanner } from './SkipWarningBanner';
 import { IndexingProgress } from './IndexingProgress';
 import { Settings } from 'lucide-react';
 import { openFile, openSettings } from '../api/runtime';
@@ -16,10 +17,12 @@ interface FramelessOverlayProps {
   search: UseSearchReturn;
   indexing: UseIndexingReturn;
   ollamaStatus: UseOllamaStatusReturn;
+  showSkipWarning?: boolean;
 }
 
-export function FramelessOverlay({ search, indexing, ollamaStatus }: FramelessOverlayProps) {
+export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarning = false }: FramelessOverlayProps) {
   const [previewResult, setPreviewResult] = useState<FileResult | null>(null);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const gridRef = useRef<ResultGridHandle>(null);
 
   function handleRemovePill(field: keyof SearchRequest, value: string) {
@@ -40,8 +43,16 @@ export function FramelessOverlay({ search, indexing, ollamaStatus }: FramelessOv
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === ' ' && previewResult) {
+      e.preventDefault();
+      setPreviewModalOpen(true);
+      return;
+    }
+
     if (e.key === 'Escape') {
-      if (previewResult) {
+      if (previewModalOpen) {
+        setPreviewModalOpen(false);
+      } else if (previewResult) {
         setPreviewResult(null);
       } else if (search.query.length > 0) {
         search.clearQuery();
@@ -89,6 +100,7 @@ export function FramelessOverlay({ search, indexing, ollamaStatus }: FramelessOv
       </div>
 
       <OllamaBanner reachable={ollamaStatus.reachable} modelsLoaded={ollamaStatus.modelsLoaded} />
+      <SkipWarningBanner visible={showSkipWarning} />
 
       <div style={{ padding: '0 0 8px', flexShrink: 0 }}>
         <SearchBar
@@ -107,21 +119,50 @@ export function FramelessOverlay({ search, indexing, ollamaStatus }: FramelessOv
       <div style={{ borderTop: '1px solid var(--divider)', flexShrink: 0 }} />
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <ResultGrid
-          ref={gridRef}
-          results={search.results}
-          query={search.query}
-          hasMore={search.hasMore}
-          loading={search.loading}
-          onOpen={handleOpen}
-          onSelect={handleSelect}
-          onLoadMore={search.loadMore}
-        />
+        <div
+          data-testid="overlay-results-pane"
+          style={{ display: 'flex', flex: previewResult ? 3 : 1, minWidth: 0 }}
+        >
+          <ResultGrid
+            ref={gridRef}
+            results={search.results}
+            query={search.query}
+            hasMore={search.hasMore}
+            loading={search.loading}
+            onOpen={handleOpen}
+            onSelect={handleSelect}
+            onApplySuggestion={search.setQuery}
+            onLoadMore={search.loadMore}
+          />
+        </div>
 
         {previewResult && (
-          <PreviewPane result={previewResult} onOpen={handleOpen} />
+          <div data-testid="overlay-preview-pane" style={{ display: 'flex', flex: 2, minWidth: 0 }}>
+            <PreviewPane result={previewResult} onOpen={handleOpen} />
+          </div>
         )}
       </div>
+
+      {previewModalOpen && previewResult && (
+        <div
+          data-testid="preview-modal"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0,0,0,0.56)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div style={{ width: 'min(780px, 100%)', maxHeight: '100%', display: 'flex' }}>
+            <PreviewPane result={previewResult} onOpen={handleOpen} />
+          </div>
+        </div>
+      )}
 
       <IndexingProgress activeJob={indexing.activeJob} />
     </div>

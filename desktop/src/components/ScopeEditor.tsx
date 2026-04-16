@@ -1,4 +1,5 @@
 import { FolderOpen, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
 import { formatRelativeTime } from '../utils';
 import type { useSettings } from '../hooks/useSettings';
 
@@ -12,10 +13,10 @@ export function ScopeEditor({ settings }: ScopeEditorProps) {
   const { roots, loading, addRoot, removeRoot, reindex } = settings;
 
   async function handleAddFolder() {
-    // In the real app this would use @tauri-apps/plugin-dialog open()
-    // For now use a simple prompt fallback (UI polished in future)
-    const path = window.prompt('Enter folder path:');
-    if (path) await addRoot(path);
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked === 'string' && picked.trim().length > 0) {
+      await addRoot(picked);
+    }
   }
 
   if (loading) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -6,6 +6,7 @@ import { FramelessOverlay } from '../../src/components/FramelessOverlay';
 import type { UseSearchReturn } from '../../src/hooks/useSearch';
 import type { UseOllamaStatusReturn } from '../../src/hooks/useOllamaStatus';
 import type { IndexingJob } from '../../src/hooks/useIndexing';
+import type { FileResult } from '../../src/core/types';
 
 interface IndexingState {
   jobs: IndexingJob[];
@@ -27,7 +28,29 @@ const makeOllama = (overrides: Partial<UseOllamaStatusReturn> = {}): UseOllamaSt
   reachable: true, modelsLoaded: [], loading: false, checkNow: vi.fn(), ...overrides,
 });
 
+const makeResult = (id: number): FileResult => ({
+  fileId: id,
+  rootId: 1,
+  path: `/docs/file${id}.txt`,
+  filename: `file${id}.txt`,
+  mediaType: 'txt',
+  sizeBytes: 1024,
+  indexedAt: 1000,
+  confidence: 1,
+  snippet: `snippet ${id}`,
+  score: 0.9,
+});
+
 const mockGetCurrentWindow = vi.mocked(getCurrentWindow);
+
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ width: 600, height: 480, top: 0, left: 0, bottom: 480, right: 600 }),
+  });
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 480 });
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 600 });
+});
 
 describe('FramelessOverlay', () => {
   it('renders search bar', () => {
@@ -38,6 +61,23 @@ describe('FramelessOverlay', () => {
   it('shows OllamaBanner when ollama is not reachable', () => {
     render(<FramelessOverlay search={makeSearch()} indexing={makeIndexing()} ollamaStatus={makeOllama({ reachable: false })} />);
     expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('shows skip warning banner when requested', () => {
+    render(
+      <FramelessOverlay
+        search={makeSearch()}
+        indexing={makeIndexing()}
+        ollamaStatus={makeOllama()}
+        showSkipWarning={true}
+      />
+    );
+    expect(screen.getByTestId('skip-warning-banner')).toBeInTheDocument();
+  });
+
+  it('hides skip warning banner by default', () => {
+    render(<FramelessOverlay search={makeSearch()} indexing={makeIndexing()} ollamaStatus={makeOllama()} />);
+    expect(screen.queryByTestId('skip-warning-banner')).not.toBeInTheDocument();
   });
 
   it('does not show OllamaBanner when reachable', () => {
@@ -70,5 +110,38 @@ describe('FramelessOverlay', () => {
     render(<FramelessOverlay search={makeSearch({ query: 'invoices', clearQuery })} indexing={makeIndexing()} ollamaStatus={makeOllama()} />);
     await user.keyboard('{Escape}');
     expect(clearQuery).toHaveBeenCalled();
+  });
+
+  it('uses full-width results pane when no preview is selected', () => {
+    render(<FramelessOverlay search={makeSearch()} indexing={makeIndexing()} ollamaStatus={makeOllama()} />);
+    const resultsPane = screen.getByTestId('overlay-results-pane');
+    expect(resultsPane).toHaveStyle({ flex: '1' });
+    expect(screen.queryByTestId('overlay-preview-pane')).not.toBeInTheDocument();
+  });
+
+  it('uses 60/40 split when a preview is selected', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const search = makeSearch({ results: [makeResult(1)] });
+    render(<FramelessOverlay search={search} indexing={makeIndexing()} ollamaStatus={makeOllama()} />);
+
+    await user.click(screen.getByTestId('result-tile'));
+
+    expect(screen.getByTestId('overlay-results-pane')).toHaveStyle({ flex: '3' });
+    expect(screen.getByTestId('overlay-preview-pane')).toHaveStyle({ flex: '2' });
+  });
+
+  it('opens and closes full preview modal with Space and Escape', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const search = makeSearch({ results: [makeResult(1)] });
+    render(<FramelessOverlay search={search} indexing={makeIndexing()} ollamaStatus={makeOllama()} />);
+
+    await user.click(screen.getByTestId('result-tile'));
+    expect(screen.queryByTestId('preview-modal')).not.toBeInTheDocument();
+
+    await user.keyboard(' ');
+    expect(screen.getByTestId('preview-modal')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('preview-modal')).not.toBeInTheDocument();
   });
 });

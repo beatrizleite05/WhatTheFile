@@ -30,9 +30,11 @@ describe('ResultTile', () => {
   it('calls onSelect when clicked', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
     const onSelect = vi.fn();
-    render(<ResultTile result={result} isSelected={false} onSelect={onSelect} onOpen={vi.fn()} />);
+    const onOpen = vi.fn();
+    render(<ResultTile result={result} isSelected={false} onSelect={onSelect} onOpen={onOpen} />);
     await user.click(screen.getByTestId('result-tile'));
     expect(onSelect).toHaveBeenCalledWith(result);
+    expect(onOpen).toHaveBeenCalledWith(result);
   });
 
   it('calls onOpen when Enter is pressed while selected', async () => {

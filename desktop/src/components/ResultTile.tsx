@@ -30,7 +30,10 @@ export function ResultTile({ result, isSelected, onSelect, onOpen, style }: Resu
       data-selected={isSelected ? 'true' : 'false'}
       tabIndex={0}
       whileHover={{ backgroundColor: 'rgba(255,255,255,0.04)' }}
-      onClick={() => onSelect(result)}
+      onClick={() => {
+        onSelect(result);
+        onOpen(result);
+      }}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen(result); }}
       style={{
         display: 'flex',

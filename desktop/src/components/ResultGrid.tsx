@@ -1,6 +1,8 @@
-import { useState, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
+import { useState, useRef, useCallback, useImperativeHandle, forwardRef, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ResultTile } from './ResultTile';
+import { EmptyStateSuggestions } from './EmptyStateSuggestions';
+import { getRecentFiles } from '../api/files';
 import type { FileResult } from '../core/types';
 
 interface ResultGridProps {
@@ -10,6 +12,7 @@ interface ResultGridProps {
   loading: boolean;
   onOpen: (result: FileResult) => void;
   onSelect?: (result: FileResult) => void;
+  onApplySuggestion?: (query: string) => void;
   onLoadMore: () => void;
 }
 
@@ -18,9 +21,28 @@ export interface ResultGridHandle {
 }
 
 export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
-  function ResultGrid({ results, query, hasMore, loading, onOpen, onSelect, onLoadMore }, ref) {
+  function ResultGrid({ results, query, hasMore, loading, onOpen, onSelect, onApplySuggestion, onLoadMore }, ref) {
     const [selectedIndex, setSelectedIndex] = useState(-1);
+    const [suggestions, setSuggestions] = useState<FileResult[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      let mounted = true;
+
+      if (results.length === 0 && query.length > 0) {
+        getRecentFiles(4)
+          .then((items) => {
+            if (mounted) setSuggestions(Array.isArray(items) ? items : []);
+          })
+          .catch(() => {
+            if (mounted) setSuggestions([]);
+          });
+      }
+
+      return () => {
+        mounted = false;
+      };
+    }, [results.length, query]);
 
     const virtualizer = useVirtualizer({
       count: results.length,
@@ -81,7 +103,12 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
           }}
         >
           <span>No results for "{query}"</span>
-          <span style={{ fontSize: 'var(--font-size-xs)' }}>Try broader terms or a different mode</span>
+          <EmptyStateSuggestions
+            suggestions={suggestions}
+            onApplySuggestion={(suggestionQuery) => {
+              onApplySuggestion?.(suggestionQuery);
+            }}
+          />
         </div>
       );
     }

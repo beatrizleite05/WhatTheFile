@@ -364,6 +364,63 @@ pub fn search_files(
     Ok(SearchResponse { results: page, total, limit, offset: query.offset, next_cursor })
 }
 
+pub fn recent_files(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<FileSearchResult>, AppError> {
+    let safe_limit = limit.clamp(1, 8);
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.root_id, r.path, f.rel_path, f.filename, f.media_type,
+                f.size_bytes, f.indexed_at, f.confidence, f.extracted_text
+         FROM files f
+         JOIN roots r ON r.id = f.root_id
+         WHERE f.deleted_at IS NULL
+           AND r.active = 1
+         ORDER BY f.indexed_at DESC
+         LIMIT ?1",
+    )?;
+
+    let rows = stmt.query_map(params![safe_limit], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, i64>(6)?,
+            r.get::<_, i64>(7)?,
+            r.get::<_, f32>(8)?,
+            r.get::<_, String>(9)?,
+        ))
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (file_id, root_id, root_path, rel_path, filename, media_type,
+             size_bytes, indexed_at, confidence, extracted_text) = row?;
+        let abs_path = std::path::Path::new(&root_path)
+            .join(&rel_path)
+            .to_string_lossy()
+            .into_owned();
+
+        out.push(FileSearchResult {
+            file_id,
+            root_id,
+            path: abs_path,
+            filename,
+            media_type,
+            size_bytes,
+            indexed_at,
+            confidence,
+            snippet: extracted_text.chars().take(200).collect(),
+            score: 0.0,
+        });
+    }
+
+    Ok(out)
+}
+
 fn build_snippet(
     conn: &Connection,
     best_chunk_id: Option<i64>,

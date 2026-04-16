@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { OnboardingFlow } from '../../src/components/OnboardingFlow';
 
-const mockInvoke = vi.mocked(invoke);
+const mockOpen = vi.mocked(open);
 
 const mockSettings = {
   roots: [],
@@ -17,7 +17,7 @@ const mockSettings = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockInvoke.mockResolvedValue([]);
+  mockOpen.mockResolvedValue(null);
   localStorage.clear();
 });
 
@@ -47,7 +47,7 @@ describe('OnboardingFlow', () => {
     render(<OnboardingFlow onComplete={onComplete} settings={mockSettings} />);
     await user.click(screen.getByRole('button', { name: /next/i }));
     await user.click(screen.getByRole('button', { name: /get started/i }));
-    expect(onComplete).toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(false);
   });
 
   it('calls addRoot for each selected preset when Get Started is clicked', async () => {
@@ -60,7 +60,23 @@ describe('OnboardingFlow', () => {
     await user.click(screen.getByRole('button', { name: /next/i }));
     await user.click(screen.getByRole('button', { name: /get started/i }));
 
-    expect(addRoot).toHaveBeenCalledWith(expect.stringContaining('Documents'));
+    expect(addRoot).toHaveBeenCalledWith('/Users/test/Documents');
+  });
+
+  it('adds selected custom folder on Get Started', async () => {
+    mockOpen.mockResolvedValue('/Users/test/Custom');
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const addRoot = vi.fn().mockResolvedValue(undefined);
+    const settings = { ...mockSettings, addRoot };
+    render(<OnboardingFlow onComplete={vi.fn()} settings={settings} />);
+
+    await user.click(screen.getByRole('button', { name: /add custom folder/i }));
+    expect(await screen.findByTestId('custom-folder-item')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /next/i }));
+    await user.click(screen.getByRole('button', { name: /get started/i }));
+
+    expect(addRoot).toHaveBeenCalledWith('/Users/test/Custom');
   });
 
   it('Skip for now button calls onComplete with warning shown', async () => {
@@ -68,6 +84,6 @@ describe('OnboardingFlow', () => {
     const onComplete = vi.fn();
     render(<OnboardingFlow onComplete={onComplete} settings={mockSettings} />);
     await user.click(screen.getByRole('button', { name: /skip/i }));
-    expect(onComplete).toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(true);
   });
 });

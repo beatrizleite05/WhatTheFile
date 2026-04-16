@@ -15,14 +15,24 @@ export default function App() {
   const [onboarded, setOnboarded] = useState(
     () => localStorage.getItem('wtf:onboarded') === 'true'
   );
+  const [skippedOnboarding, setSkippedOnboarding] = useState(
+    () => localStorage.getItem('wtf:skippedOnboarding') === 'true'
+  );
 
   const showOnboarding = !onboarded;
 
   if (showOnboarding) {
     return (
       <OnboardingFlow
-        onComplete={() => {
+        onComplete={(skipped) => {
           localStorage.setItem('wtf:onboarded', 'true');
+          if (skipped) {
+            localStorage.setItem('wtf:skippedOnboarding', 'true');
+            setSkippedOnboarding(true);
+          } else {
+            localStorage.removeItem('wtf:skippedOnboarding');
+            setSkippedOnboarding(false);
+          }
           setOnboarded(true);
         }}
         settings={settings}
@@ -35,6 +45,7 @@ export default function App() {
       search={search}
       indexing={indexing}
       ollamaStatus={ollamaStatus}
+      showSkipWarning={skippedOnboarding && settings.roots.length === 0}
     />
   );
 }

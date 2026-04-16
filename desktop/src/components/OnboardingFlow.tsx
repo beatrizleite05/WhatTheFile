@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { FolderOpen, Shield, AlertTriangle } from 'lucide-react';
+import { FolderOpen, Shield, AlertTriangle, Plus, X } from 'lucide-react';
 import { documentDir, desktopDir, downloadDir, pictureDir } from '@tauri-apps/api/path';
+import { open } from '@tauri-apps/plugin-dialog';
 import { fadeSlide } from '../styles/animations';
 import type { useSettings } from '../hooks/useSettings';
 
 type SettingsHook = ReturnType<typeof useSettings>;
 
 interface OnboardingFlowProps {
-  onComplete: () => void;
+  onComplete: (skipped: boolean) => void;
   settings: SettingsHook;
 }
 
@@ -22,6 +23,7 @@ const PRESETS: { label: string; resolver: () => Promise<string> }[] = [
 export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
   const [step, setStep] = useState<'folders' | 'privacy'>('folders');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [customFolders, setCustomFolders] = useState<string[]>([]);
 
   function togglePreset(label: string) {
     setSelected((prev) => {
@@ -30,6 +32,17 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
       else next.add(label);
       return next;
     });
+  }
+
+  async function handleAddCustomFolder() {
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== 'string' || picked.trim().length === 0) return;
+
+    setCustomFolders((prev) => (prev.includes(picked) ? prev : [...prev, picked]));
+  }
+
+  function removeCustomFolder(path: string) {
+    setCustomFolders((prev) => prev.filter((p) => p !== path));
   }
 
   async function handleGetStarted() {
@@ -42,7 +55,16 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
         // If the OS directory doesn't exist, skip it silently.
       }
     }
-    onComplete();
+
+    for (const path of customFolders) {
+      try {
+        await settings.addRoot(path);
+      } catch {
+        // Skip invalid or inaccessible custom paths.
+      }
+    }
+
+    onComplete(false);
   }
 
   const btnBase: React.CSSProperties = {
@@ -115,6 +137,66 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
             ))}
           </div>
 
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                handleAddCustomFolder().catch(() => {});
+              }}
+              style={{
+                ...btnBase,
+                border: '1px solid var(--surface-border)',
+                background: 'rgba(255,255,255,0.05)',
+                color: 'var(--text-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+              }}
+            >
+              <Plus size={13} />
+              Add Custom Folder
+            </button>
+
+            {customFolders.map((path) => (
+              <div
+                key={path}
+                data-testid="custom-folder-item"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-element)',
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid var(--surface-border)',
+                }}
+              >
+                <span
+                  style={{
+                    color: 'var(--text-secondary)',
+                    fontSize: 'var(--font-size-xs)',
+                    fontFamily: 'var(--font-mono)',
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {path}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${path}`}
+                  onClick={() => removeCustomFolder(path)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', display: 'flex' }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={() => setStep('privacy')}
@@ -123,7 +205,7 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
               Next
             </button>
             <button
-              onClick={onComplete}
+              onClick={() => onComplete(true)}
               style={{ ...btnBase, background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)', border: '1px solid var(--surface-border)' }}
             >
               Skip for now

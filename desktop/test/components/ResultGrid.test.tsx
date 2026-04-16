@@ -4,6 +4,12 @@ import userEvent from '@testing-library/user-event';
 import { ResultGrid } from '../../src/components/ResultGrid';
 import type { FileResult } from '../../src/core/types';
 
+const getRecentFilesMock = vi.fn();
+
+vi.mock('../../src/api/files', () => ({
+  getRecentFiles: (...args: unknown[]) => getRecentFilesMock(...args),
+}));
+
 // react-virtual needs a scroll container with real dimensions in jsdom
 beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
@@ -23,7 +29,30 @@ const makeResult = (id: number): FileResult => ({
 const results = [makeResult(1), makeResult(2), makeResult(3)];
 
 describe('ResultGrid', () => {
+  it('renders suggestion buttons in empty state when recent files exist', async () => {
+    getRecentFilesMock.mockResolvedValue([makeResult(11), makeResult(12)]);
+    render(
+      <ResultGrid results={[]} query="something" hasMore={false} loading={false}
+        onOpen={vi.fn()} onLoadMore={vi.fn()} />
+    );
+    expect(await screen.findAllByTestId('empty-suggestion')).toHaveLength(2);
+  });
+
+  it('applies suggestion query when suggestion is clicked', async () => {
+    getRecentFilesMock.mockResolvedValue([makeResult(21)]);
+    const onApplySuggestion = vi.fn();
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    render(
+      <ResultGrid results={[]} query="nothing" hasMore={false} loading={false}
+        onOpen={vi.fn()} onLoadMore={vi.fn()} onApplySuggestion={onApplySuggestion} />
+    );
+
+    await user.click(await screen.findByTestId('empty-suggestion'));
+    expect(onApplySuggestion).toHaveBeenCalledWith('file21.txt');
+  });
+
   it('renders a tile for each result', () => {
+    getRecentFilesMock.mockResolvedValue([]);
     render(
       <ResultGrid results={results} query="test" hasMore={false} loading={false}
         onOpen={vi.fn()} onLoadMore={vi.fn()} />
@@ -32,6 +61,7 @@ describe('ResultGrid', () => {
   });
 
   it('shows empty state when results are empty and query is non-empty', () => {
+    getRecentFilesMock.mockResolvedValue([]);
     render(
       <ResultGrid results={[]} query="something" hasMore={false} loading={false}
         onOpen={vi.fn()} onLoadMore={vi.fn()} />
@@ -40,6 +70,7 @@ describe('ResultGrid', () => {
   });
 
   it('does not show empty state when query is empty', () => {
+    getRecentFilesMock.mockResolvedValue([]);
     render(
       <ResultGrid results={[]} query="" hasMore={false} loading={false}
         onOpen={vi.fn()} onLoadMore={vi.fn()} />
@@ -48,6 +79,7 @@ describe('ResultGrid', () => {
   });
 
   it('ArrowDown moves selection to next item', async () => {
+    getRecentFilesMock.mockResolvedValue([]);
     const user = userEvent.setup({ advanceTimers: () => {} });
     render(
       <ResultGrid results={results} query="test" hasMore={false} loading={false}
@@ -60,6 +92,7 @@ describe('ResultGrid', () => {
   });
 
   it('Enter on selected item calls onOpen', async () => {
+    getRecentFilesMock.mockResolvedValue([]);
     const user = userEvent.setup({ advanceTimers: () => {} });
     const onOpen = vi.fn();
     render(

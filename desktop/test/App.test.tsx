@@ -45,4 +45,36 @@ describe('App', () => {
     const overlay = screen.queryByRole('searchbox');
     expect(onboarding === null || overlay === null).toBe(true);
   });
+
+  it('shows persistent skip warning when onboarded via skip and no roots exist', async () => {
+    localStorage.setItem('wtf:onboarded', 'true');
+    localStorage.setItem('wtf:skippedOnboarding', 'true');
+
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === 'list_roots') return [];
+      if (command === 'get_runtime_status') return { ollamaReachable: false, modelsLoaded: [] };
+      return [];
+    });
+
+    render(<App />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId('skip-warning-banner')).toBeInTheDocument();
+  });
+
+  it('hides skip warning when at least one root is configured', async () => {
+    localStorage.setItem('wtf:onboarded', 'true');
+    localStorage.setItem('wtf:skippedOnboarding', 'true');
+
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === 'list_roots') {
+        return [{ id: 1, path: '/Users/test/Documents', label: 'Documents', active: true, createdAt: 1, lastIndexedAt: null }];
+      }
+      if (command === 'get_runtime_status') return { ollamaReachable: false, modelsLoaded: [] };
+      return [];
+    });
+
+    render(<App />);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('skip-warning-banner')).not.toBeInTheDocument();
+  });
 });

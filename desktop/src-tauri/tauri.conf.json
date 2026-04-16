@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "WhatTheFile",
-        "width": 680,
-        "height": 560,
+        "width": 760,
+        "height": 600,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,

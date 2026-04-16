@@ -15,3 +15,14 @@ vi.mock('@tauri-apps/api/window', () => ({
     show: vi.fn(() => Promise.resolve()),
   })),
 }));
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn(() => Promise.resolve(null)),
+}));
+
+vi.mock('@tauri-apps/api/path', () => ({
+  documentDir: vi.fn(() => Promise.resolve('/Users/test/Documents')),
+  desktopDir: vi.fn(() => Promise.resolve('/Users/test/Desktop')),
+  downloadDir: vi.fn(() => Promise.resolve('/Users/test/Downloads')),
+  pictureDir: vi.fn(() => Promise.resolve('/Users/test/Pictures')),
+}));

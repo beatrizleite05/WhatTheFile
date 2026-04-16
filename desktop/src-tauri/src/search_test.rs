@@ -383,6 +383,29 @@ fn test_combined_date_and_media_type_filter() {
     assert!(!rows.iter().any(|(id, _)| *id == txt_new), "txt must be excluded by media type");
 }
 
+#[test]
+fn test_recent_files_returns_most_recent_first_with_limit() {
+    let conn = make_test_conn();
+    let root_id = seed_root(&conn);
+    let now = db::unix_now();
+
+    let id_old = db::upsert_file_metadata(
+        &conn, root_id, "old.txt", "old.txt", "txt",
+        100, 1000, "fp-old", "ext-v1", now - 100, now - 100,
+    ).unwrap();
+    db::update_file_content(&conn, id_old, "old content", 1.0, "en", "ext-v1", now - 100).unwrap();
+
+    let id_new = db::upsert_file_metadata(
+        &conn, root_id, "new.txt", "new.txt", "txt",
+        100, 1000, "fp-new", "ext-v1", now, now,
+    ).unwrap();
+    db::update_file_content(&conn, id_new, "new content", 1.0, "en", "ext-v1", now).unwrap();
+
+    let recent = recent_files(&conn, 1).unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].filename, "new.txt");
+}
+
 fn keyword_query(text: &str) -> SearchQuery {
     SearchQuery {
         query_text: text.into(),
