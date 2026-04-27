@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { search } from '../api/search';
+import { parseQueryLlm } from '../api/queryParser';
 import { parseNaturalLanguageQuery } from '../core/queryParser';
 import { errorMessage } from '../utils';
-import type { FileResult, SearchRequest } from '../core/types';
+import type { FileResult, ParsedQuery } from '../core/types';
 
 const DEBOUNCE_MS = 300;
 const PAGE_SIZE = 50;
@@ -12,31 +13,45 @@ const MIN_QUERY_LEN = 2;
 export interface UseSearchReturn {
   query: string;
   setQuery: (q: string) => void;
-  mode: SearchRequest['mode'];
-  setMode: (m: SearchRequest['mode']) => void;
+  mode: ParsedQuery['mode'];
+  setMode: (m: ParsedQuery['mode']) => void;
   results: FileResult[];
   total: number;
   hasMore: boolean;
   loading: boolean;
   error: string | null;
-  parsedRequest: SearchRequest | null;
+  parsedRequest: ParsedQuery | null;
   loadMore: () => void;
   clearQuery: () => void;
 }
 
+function toSearchQuery(parsed: ParsedQuery, off: number) {
+  return {
+    queryText: parsed.queryText,
+    mediaTypes: parsed.mediaTypes,
+    rootScope: parsed.rootScope,
+    dateFrom: parsed.dateFrom || undefined,
+    dateTo: parsed.dateTo || undefined,
+    minConfidence: parsed.minConfidence,
+    mode: parsed.mode,
+    limit: PAGE_SIZE,
+    offset: off,
+  };
+}
+
 export function useSearch(): UseSearchReturn {
   const [query, setQueryState] = useState('');
-  const [mode, setModeState] = useState<SearchRequest['mode']>('hybrid');
+  const [mode, setModeState] = useState<ParsedQuery['mode']>('hybrid');
   const [results, setResults] = useState<FileResult[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [parsedRequest, setParsedRequest] = useState<SearchRequest | null>(null);
+  const [parsedRequest, setParsedRequest] = useState<ParsedQuery | null>(null);
 
   const generationRef = useRef(0);
 
-  const runSearch = useCallback(async (q: string, m: SearchRequest['mode'], off: number, append: boolean) => {
+  const runSearch = useCallback(async (q: string, m: ParsedQuery['mode'], off: number, append: boolean) => {
     if (q.length < MIN_QUERY_LEN) {
       setResults([]);
       setTotal(0);
@@ -45,24 +60,14 @@ export function useSearch(): UseSearchReturn {
     }
 
     const gen = ++generationRef.current;
-    const parsed = parseNaturalLanguageQuery(q, m);
+    const { parsed, needsLlmFallback } = parseNaturalLanguageQuery(q, m);
     setParsedRequest(parsed);
     setLoading(true);
     setError(null);
 
     try {
-      const response = await search({
-        queryText: parsed.queryText,
-        mediaTypes: parsed.mediaTypes,
-        rootScope: parsed.rootScope,
-        dateFrom: parsed.dateFrom || undefined,
-        dateTo: parsed.dateTo || undefined,
-        minConfidence: parsed.minConfidence,
-        mode: m,
-        limit: PAGE_SIZE,
-        offset: off,
-      });
-
+      // Phase 1: fire immediately with deterministic parse result
+      const response = await search(toSearchQuery(parsed, off));
       if (gen !== generationRef.current) return;
 
       if (append) {
@@ -71,6 +76,25 @@ export function useSearch(): UseSearchReturn {
         setResults(response.results);
       }
       setTotal(response.total);
+
+      // Phase 2: if the deterministic pass left too much unresolved, ask the
+      // LLM to re-parse and fire a second search with the refined intent.
+      if (needsLlmFallback) {
+        const llmParsed = await parseQueryLlm(q, m);
+        if (gen !== generationRef.current) return;
+
+        setParsedRequest(llmParsed);
+
+        const llmResponse = await search(toSearchQuery(llmParsed, off));
+        if (gen !== generationRef.current) return;
+
+        if (append) {
+          setResults((prev) => [...prev, ...llmResponse.results]);
+        } else {
+          setResults(llmResponse.results);
+        }
+        setTotal(llmResponse.total);
+      }
     } catch (e) {
       if (gen !== generationRef.current) return;
       setError(errorMessage(e));
@@ -121,7 +145,7 @@ export function useSearch(): UseSearchReturn {
     setQueryState(q);
   }, []);
 
-  const setMode = useCallback((m: SearchRequest['mode']) => {
+  const setMode = useCallback((m: ParsedQuery['mode']) => {
     setModeState(m);
   }, []);
 

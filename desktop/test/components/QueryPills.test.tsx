@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryPills } from '../../src/components/QueryPills';
-import type { SearchRequest } from '../../src/core/types';
+import type { ParsedQuery } from '../../src/core/types';
 
-const baseRequest = (): SearchRequest => ({
+const baseRequest = (): ParsedQuery => ({
   queryText: 'invoices',
   mediaTypes: [],
   rootScope: [],
@@ -12,12 +12,16 @@ const baseRequest = (): SearchRequest => ({
   dateTo: '',
   minConfidence: 0,
   mode: 'hybrid',
-  parserConfidence: 0.9,
 });
 
 describe('QueryPills', () => {
   it('renders nothing when parsedRequest is null', () => {
     const { container } = render(<QueryPills parsedRequest={null} onRemove={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders nothing when there are no active filters', () => {
+    const { container } = render(<QueryPills parsedRequest={baseRequest()} onRemove={vi.fn()} />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -38,18 +42,6 @@ describe('QueryPills', () => {
     const req = { ...baseRequest(), rootScope: ['Documents'] };
     render(<QueryPills parsedRequest={req} onRemove={vi.fn()} />);
     expect(screen.getByText(/Documents/)).toBeInTheDocument();
-  });
-
-  it('renders AI-interpreted badge when parserConfidence < 0.5', () => {
-    const req = { ...baseRequest(), parserConfidence: 0.2 };
-    render(<QueryPills parsedRequest={req} onRemove={vi.fn()} />);
-    expect(screen.getByText(/AI/i)).toBeInTheDocument();
-  });
-
-  it('does not render AI badge when parserConfidence >= 0.5', () => {
-    const req = { ...baseRequest(), mediaTypes: ['pdf'], parserConfidence: 0.9 };
-    render(<QueryPills parsedRequest={req} onRemove={vi.fn()} />);
-    expect(screen.queryByText(/AI/i)).not.toBeInTheDocument();
   });
 
   it('calls onRemove with field and value when × is clicked on a mediaType pill', async () => {

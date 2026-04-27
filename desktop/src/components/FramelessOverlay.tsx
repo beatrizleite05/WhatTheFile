@@ -8,10 +8,11 @@ import { SkipWarningBanner } from './SkipWarningBanner';
 import { IndexingProgress } from './IndexingProgress';
 import { Settings } from 'lucide-react';
 import { openFile, openSettings } from '../api/runtime';
+import { removeFirstToken } from '../utils';
 import type { UseSearchReturn } from '../hooks/useSearch';
 import type { UseIndexingReturn } from '../hooks/useIndexing';
 import type { UseOllamaStatusReturn } from '../hooks/useOllamaStatus';
-import type { FileResult, SearchRequest } from '../core/types';
+import type { FileResult, ParsedQuery } from '../core/types';
 
 interface FramelessOverlayProps {
   search: UseSearchReturn;
@@ -25,10 +26,15 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const gridRef = useRef<ResultGridHandle>(null);
 
-  function handleRemovePill(field: keyof SearchRequest, value: string) {
+  function handleOpenSettings() {
+    openSettings().catch((error) => {
+      console.error('Failed to open settings window', error);
+    });
+  }
+
+  function handleRemovePill(field: keyof ParsedQuery, value: string) {
     if (field === 'mediaTypes') {
-      const remaining = search.query.replace(value, '').trim();
-      search.setQuery(remaining);
+      search.setQuery(removeFirstToken(search.query, value));
     } else {
       search.clearQuery();
     }
@@ -79,8 +85,8 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
         <div data-tauri-drag-region style={{ position: 'absolute', inset: 0, cursor: 'default' }} />
         <button
           aria-label="Open settings"
-          onClick={() => openSettings().catch(() => {})}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openSettings().catch(() => {}); }}
+          onClick={handleOpenSettings}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenSettings(); }}
           style={{
             position: 'absolute',
             right: 10,

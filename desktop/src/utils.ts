@@ -54,6 +54,14 @@ export function mediaTypePillColors(mediaType: string): { bg: string; text: stri
   return { bg: 'var(--pill-doc-bg)', text: 'var(--pill-doc-text)' };
 }
 
+// Removes the first whole-word occurrence of `token` from `query`.
+// Uses word boundaries so "pdf" won't corrupt "pdfviewer", and only removes
+// the first match so a second identical token is left intact.
+export function removeFirstToken(query: string, token: string): string {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return query.replace(new RegExp(`(?<![\\w])${escaped}(?![\\w])`, 'i'), '').replace(/\s{2,}/g, ' ').trim();
+}
+
 export function errorMessage(e: unknown): string {
   if (typeof e === 'string') return e;
   if (e instanceof Error) return e.message;

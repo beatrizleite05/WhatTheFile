@@ -25,6 +25,7 @@ sqlite-vec = "0.1"
 blake3 = "1"
 walkdir = "2"
 ureq = { version = "2", features = ["json"] }
+regex = "1"
 docx-rs = "0.4"
 calamine = "0.24"
 pdfium-render = { version = "0.8", features = ["image"] }

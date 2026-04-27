@@ -1,11 +1,11 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import { mediaTypePillColors, pillColorVar } from '../utils';
-import type { SearchRequest } from '../core/types';
+import type { ParsedQuery } from '../core/types';
 
 interface QueryPillsProps {
-  parsedRequest: SearchRequest | null;
-  onRemove: (field: keyof SearchRequest, value: string) => void;
+  parsedRequest: ParsedQuery | null;
+  onRemove: (field: keyof ParsedQuery, value: string) => void;
 }
 
 interface PillProps {
@@ -59,10 +59,10 @@ function Pill({ label, bg, text, onRemove, ariaLabel }: PillProps) {
 export function QueryPills({ parsedRequest, onRemove }: QueryPillsProps) {
   if (!parsedRequest) return null;
 
-  const { mediaTypes, dateFrom, dateTo, rootScope, minConfidence, parserConfidence } = parsedRequest;
+  const { mediaTypes, dateFrom, dateTo, rootScope, minConfidence } = parsedRequest;
   const hasPills = mediaTypes.length > 0 || dateFrom || dateTo || rootScope.length > 0 || minConfidence > 0;
 
-  if (!hasPills && parserConfidence >= 0.5) return null;
+  if (!hasPills) return null;
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
@@ -125,23 +125,7 @@ export function QueryPills({ parsedRequest, onRemove }: QueryPillsProps) {
           />
         )}
 
-        {parserConfidence < 0.5 && (
-          <motion.span
-            key="ai-badge"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              fontSize: 'var(--font-size-xs)',
-              color: 'var(--text-tertiary)',
-              padding: '2px 6px',
-              borderRadius: 'var(--radius-pill)',
-              border: '1px solid var(--surface-border)',
-            }}
-          >
-            AI-interpreted
-          </motion.span>
-        )}
+
       </AnimatePresence>
     </div>
   );

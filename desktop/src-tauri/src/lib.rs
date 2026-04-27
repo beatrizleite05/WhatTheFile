@@ -73,6 +73,7 @@ pub fn run() {
             delete_index,
             open_file,
             get_runtime_status,
+            parse_query,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -187,6 +188,19 @@ async fn get_recent_files(
 #[tauri::command]
 async fn open_file(path: String) -> Result<(), String> {
     platform::open_file(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn parse_query(
+    state: tauri::State<'_, AppState>,
+    input: String,
+) -> Result<llm::query_parser::ParsedQueryPayload, String> {
+    let ollama_url = state.ollama_url.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        llm::query_parser::parse_query(&input, &ollama_url).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

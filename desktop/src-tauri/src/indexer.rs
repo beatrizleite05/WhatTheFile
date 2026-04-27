@@ -6,6 +6,9 @@ use crate::{chunker, db, errors::AppError, extractor, llm};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// Configurable policy (allowedExtensions, excludeGlobs, maxFileSizeBytes, includeHidden) is
+// hardcoded here pending DB schema + Rust implementation. The intended contract is specified
+// in src/core/policy.ts and enforced by the tests in test/policy.spec.ts.
 const MAX_FILE_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 
 fn detect_media_type(filename: &str) -> Option<&'static str> {

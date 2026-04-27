@@ -1,13 +1,19 @@
-import type { SearchRequest } from './types';
+import type { ParsedQuery } from './types';
 
 const MEDIA_TYPES = ['pdf', 'docx', 'xlsx', 'csv', 'txt', 'md', 'png', 'jpg', 'jpeg'];
 
+export interface ParseResult {
+  parsed: ParsedQuery;
+  // True when the deterministic pass left >3 tokens unresolved on a non-keyword
+  // query longer than 5 words — signals useSearch to fire an LLM fallback parse.
+  needsLlmFallback: boolean;
+}
+
 export function parseNaturalLanguageQuery(
   input: string,
-  mode: SearchRequest['mode'] = 'hybrid',
-): SearchRequest {
+  mode: ParsedQuery['mode'] = 'hybrid',
+): ParseResult {
   const tokens = input.trim().split(/\s+/).filter(t => t.length > 0);
-  const wordCount = tokens.length;
   const consumed = new Set<number>();
 
   const mediaTypes: string[] = [];
@@ -88,20 +94,12 @@ export function parseNaturalLanguageQuery(
   // When all tokens are consumed as structured params (e.g. "pdf 2024"),
   // fall back to the full input as query text so FTS/vector still have something to search.
   const queryText = unresolvedTokens.join(' ') || input.trim();
+  const wordCount = tokens.length;
   const unresolvedCount = unresolvedTokens.length;
+  const needsLlmFallback = mode !== 'keyword' && wordCount > 5 && unresolvedCount > 3;
 
-  // LLM fallback triggers only when ALL conditions hold per spec:
-  //   - mode is not "keyword" (keyword mode never uses LLM)
-  //   - query is long (>5 words)
-  //   - the deterministic pass left >3 tokens unresolved
-  let parserConfidence: number;
-  if (mode !== 'keyword' && wordCount > 5 && unresolvedCount > 3) {
-    parserConfidence = 0.2; // needs LLM
-  } else if (wordCount <= 5) {
-    parserConfidence = 0.9; // short query — deterministic pass is sufficient
-  } else {
-    parserConfidence = 0.8; // long but mostly parsed, or keyword mode
-  }
-
-  return { queryText, mediaTypes, rootScope, dateFrom, dateTo, minConfidence, mode, parserConfidence };
+  return {
+    parsed: { queryText, mediaTypes, rootScope, dateFrom, dateTo, minConfidence, mode },
+    needsLlmFallback,
+  };
 }

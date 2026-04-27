@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { Search, Loader2 } from 'lucide-react';
 import { QueryPills } from './QueryPills';
-import type { SearchRequest } from '../core/types';
+import type { ParsedQuery } from '../core/types';
 
 interface SearchBarProps {
   query: string;
@@ -9,13 +9,13 @@ interface SearchBarProps {
   onClear: () => void;
   onFocusResults: () => void;
   loading: boolean;
-  parsedRequest: SearchRequest | null;
-  mode: SearchRequest['mode'];
-  onModeChange: (mode: SearchRequest['mode']) => void;
-  onRemovePill: (field: keyof SearchRequest, value: string) => void;
+  parsedRequest: ParsedQuery | null;
+  mode: ParsedQuery['mode'];
+  onModeChange: (mode: ParsedQuery['mode']) => void;
+  onRemovePill: (field: keyof ParsedQuery, value: string) => void;
 }
 
-const MODES: SearchRequest['mode'][] = ['hybrid', 'keyword', 'semantic'];
+const MODES: ParsedQuery['mode'][] = ['hybrid', 'keyword', 'semantic'];
 
 export function SearchBar({
   query, onChange, onClear, onFocusResults, loading,

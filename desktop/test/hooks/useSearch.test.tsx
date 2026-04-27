@@ -4,6 +4,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSearch } from '../../src/hooks/useSearch';
 
+vi.mock('../../src/api/queryParser', () => ({
+  parseQueryLlm: vi.fn(),
+}));
+import { parseQueryLlm } from '../../src/api/queryParser';
+const mockParseQueryLlm = vi.mocked(parseQueryLlm);
+
 const mockInvoke = vi.mocked(invoke);
 const mockListen = vi.mocked(listen);
 
@@ -199,5 +205,68 @@ describe('useSearch', () => {
     const calls = mockInvoke.mock.calls;
     const lastCall = calls[calls.length - 1];
     expect((lastCall[1] as { query: { mode: string } }).query.mode).toBe('keyword');
+  });
+
+  describe('LLM fallback (two-phase search)', () => {
+    // A query that exceeds both thresholds: >5 words, >3 unresolved tokens, non-keyword mode
+    const AMBIGUOUS_QUERY = 'find the document about the project planning meeting notes';
+
+    it('fires a second search with LLM-refined ParsedQuery when deterministic parse is insufficient', async () => {
+      const llmParsed = {
+        queryText: 'project planning meeting notes',
+        mediaTypes: [],
+        rootScope: [],
+        dateFrom: '',
+        dateTo: '',
+        minConfidence: 0,
+        mode: 'hybrid' as const,
+      };
+      mockParseQueryLlm.mockResolvedValue(llmParsed);
+      // Phase 1 response, then phase 2 response
+      mockInvoke
+        .mockResolvedValueOnce(makeResponse([makeResult(1)], 1))
+        .mockResolvedValueOnce(makeResponse([makeResult(2)], 1));
+
+      const { result } = renderHook(() => useSearch());
+      await triggerSearch(result.current.setQuery, AMBIGUOUS_QUERY);
+
+      expect(mockParseQueryLlm).toHaveBeenCalledWith(AMBIGUOUS_QUERY, 'hybrid');
+      // Second invoke call should use the LLM-refined queryText
+      const secondCall = mockInvoke.mock.calls[1];
+      expect((secondCall[1] as { query: { queryText: string } }).query.queryText)
+        .toBe('project planning meeting notes');
+      // Final results come from the LLM-refined search
+      expect(result.current.results[0]?.fileId).toBe(2);
+    });
+
+    it('does not call LLM for short or well-parsed queries', async () => {
+      mockInvoke.mockResolvedValue(makeResponse());
+      const { result } = renderHook(() => useSearch());
+
+      await triggerSearch(result.current.setQuery, 'invoices pdf 2024');
+
+      expect(mockParseQueryLlm).not.toHaveBeenCalled();
+    });
+
+    it('does not call LLM in keyword mode even for long ambiguous queries', async () => {
+      mockInvoke.mockResolvedValue(makeResponse());
+      const { result } = renderHook(() => useSearch());
+
+      act(() => { result.current.setMode('keyword'); });
+      await triggerSearch(result.current.setQuery, AMBIGUOUS_QUERY);
+
+      expect(mockParseQueryLlm).not.toHaveBeenCalled();
+    });
+
+    it('keeps phase-1 results if LLM call fails', async () => {
+      mockParseQueryLlm.mockRejectedValue(new Error('ollama timeout'));
+      mockInvoke.mockResolvedValue(makeResponse([makeResult(1)], 1));
+
+      const { result } = renderHook(() => useSearch());
+      await triggerSearch(result.current.setQuery, AMBIGUOUS_QUERY);
+
+      // Error from LLM path should surface
+      expect(result.current.error).toBeTruthy();
+    });
   });
 });
