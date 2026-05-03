@@ -114,8 +114,8 @@ Onboarding (mandatory, folder picker + privacy notice + skip-with-warning), sear
 
 - Phases A, B, C complete. Phase D landed initial implementation; retrieval-quality rework in progress.
 - All decisions for the Phase D rework locked (technical-decisions.md §4, §7-10, §15-30).
-- **Commit 1 done** — eval harness scaffold landed. Baseline: Recall@10=0.714, MRR=0.662, NDCG@10=0.676 (n=56 positive queries). Group A=0.000 (expected — filetype expansion not yet landed), Group C=0.091 (expected — vision prompt rework not yet landed).
-- Next: **commit 2** (capture baseline via `npm run eval:promote`), then **commit 3** (Group A: snippet rework + filetype expansion). See [IMPLEMENTATION.md](IMPLEMENTATION.md).
+- **Commits 1 + 2 done** — eval harness scaffold landed; pre-rework baseline committed: Recall@10=0.714, MRR=0.662, NDCG@10=0.676 (n=56). Group A=0.000 (filetype expansion not yet landed), Group C=0.091 (vision prompt rework not yet landed).
+- Next: **commit 3** (Group A: snippet rework + filetype expansion). See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 Uncommitted local changes (pre-existing, not part of commit 1): minor cleanups to `desktop/src/api/runtime.ts` and `desktop/src/components/SkipWarningBanner.tsx`.
 

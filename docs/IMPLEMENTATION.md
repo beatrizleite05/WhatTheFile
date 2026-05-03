@@ -28,7 +28,7 @@ Status legend: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## Commit 2 — Capture baseline  ☐
+## Commit 2 — Capture baseline  ☑
 
 **Goal:** lock the pre-rework metrics as the comparison point for Group A.
 
