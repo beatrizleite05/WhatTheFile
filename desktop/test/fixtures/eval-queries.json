@@ -1,0 +1,380 @@
+{
+  "_meta": {
+    "schemaNote": "Each query has: query (string), expectedFiles (basenames matching FileSearchResult.filename). Optional: group ('A'|'B'|'C') for gating per the Phase D rework, category for human inspection. Negative-case queries have expectedFiles: [] — they should return no relevant docs.",
+    "groupGuide": "A = file-type expansion / snippet rework. B = embedding-quality (prefixes / L2 / chunk size). C = vision determinism / unified prompt for image content.",
+    "languageNote": "Queries appear in both English and Portuguese (PT-PT and PT-BR). Cross-language pairs intentionally test whether the embedding model maps semantically equivalent queries to the same documents."
+  },
+  "queries": [
+    {
+      "query": "spring 2013 home furniture catalogue with prices",
+      "expectedFiles": ["PrinceCatalogue.pdf"],
+      "group": "B",
+      "category": "filename-keyword"
+    },
+    {
+      "query": "catálogo de móveis para casa primavera 2013 com preços",
+      "expectedFiles": ["PrinceCatalogue.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "Prince XML PDF catalogue example",
+      "expectedFiles": ["PrinceCatalogue.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "móveis para sala e quarto preços abaixo de 900 dólares",
+      "expectedFiles": ["PrinceCatalogue.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "Brochura Descobrimentos Pacifico",
+      "expectedFiles": ["brochura-pacifico.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "brochura turística promocional em português",
+      "expectedFiles": ["brochura-pacifico.pdf"],
+      "category": "conceptual-pt"
+    },
+    {
+      "query": "Portuguese travel brochure tourism promotional material",
+      "expectedFiles": ["brochura-pacifico.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "venha descobrir deixe-se conquistar",
+      "expectedFiles": ["brochura-pacifico.pdf"],
+      "category": "conceptual-pt"
+    },
+    {
+      "query": "come and discover let yourself be conquered Portuguese English",
+      "expectedFiles": ["brochura-pacifico.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "Guia de Montagem Indústria 4.0",
+      "expectedFiles": ["Guia de Montagem Indústria 4.0.docx"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "guia de montagem para fábrica inteligente indústria 4.0",
+      "expectedFiles": ["Guia de Montagem Indústria 4.0.docx"],
+      "category": "conceptual-pt"
+    },
+    {
+      "query": "industry 4.0 assembly guide manufacturing",
+      "expectedFiles": ["Guia de Montagem Indústria 4.0.docx"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "integer linear programming branch and bound lecture",
+      "expectedFiles": ["IntegerLinearProgramming.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "ILP cutting-plane method discrete optimization",
+      "expectedFiles": ["IntegerLinearProgramming.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "Pedro Diniz algorithm design FEUP",
+      "expectedFiles": [
+        "IntegerLinearProgramming.pdf",
+        "LinearProgramming-FEUP.pdf",
+        "GreedyAlgorithms.pdf"
+      ],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "linear programming simplex method duality",
+      "expectedFiles": ["LinearProgramming-FEUP.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "programação linear método simplex aulas universidade",
+      "expectedFiles": ["LinearProgramming-FEUP.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "knapsack greedy algorithm Huffman codes",
+      "expectedFiles": ["GreedyAlgorithms.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "algoritmos gulosos árvore geradora mínima Kruskal Prim",
+      "expectedFiles": ["GreedyAlgorithms.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "Dijkstra single source shortest path",
+      "expectedFiles": ["GreedyAlgorithms.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+
+    {
+      "query": "YesLogic invoice Prince support 2016",
+      "expectedFiles": ["index.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "fatura de software suporte anual transferência bancária Austrália",
+      "expectedFiles": ["index.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "Mintra Holding company presentation September 2020",
+      "expectedFiles": ["Mintra-Company-Presentation-September-2020.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "apresentação a investidores empresa norueguesa formação petróleo gás",
+      "expectedFiles": ["Mintra-Company-Presentation-September-2020.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "NAAC accreditation application India scanned",
+      "expectedFiles": ["Naac_appLetter.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "carta de candidatura a acreditação universitária Índia digitalizada",
+      "expectedFiles": ["Naac_appLetter.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "EPA letter to commissioners February 2015",
+      "expectedFiles": ["epa_sample_letter_sent_to_commissioners_dated_february_29_2015.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "carta da agência de proteção ambiental para comissários 2015",
+      "expectedFiles": ["epa_sample_letter_sent_to_commissioners_dated_february_29_2015.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "fillable PDF form personal information radio buttons",
+      "expectedFiles": ["Form.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "formulário PDF preenchível com dados pessoais e idiomas",
+      "expectedFiles": ["Form.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "Drylab investor newsletter film production Norway 2017",
+      "expectedFiles": ["drylab.pdf"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "startup norueguesa software produção cinematográfica",
+      "expectedFiles": ["drylab.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "USENIX Lifetime Achievement Award Tim Berners-Lee Brian Kernighan",
+      "expectedFiles": ["example.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+
+    {
+      "query": "university library guide making good presentation",
+      "expectedFiles": ["Presentation Example.pdf"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "guia universitário para fazer uma boa apresentação",
+      "expectedFiles": ["Presentation Example.pdf"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "HP AI workforce disruption strategy 58000 employees",
+      "expectedFiles": ["report_5.1_problem_identification.md"],
+      "category": "filename-keyword"
+    },
+    {
+      "query": "EU AI Act compliance employment HP report",
+      "expectedFiles": ["report_5.1_problem_identification.md"],
+      "group": "B",
+      "category": "conceptual"
+    },
+    {
+      "query": "relatório HP impacto da IA sobre trabalhadores e força de trabalho",
+      "expectedFiles": ["report_5.1_problem_identification.md"],
+      "group": "B",
+      "category": "cross-language-pt-en"
+    },
+
+    {
+      "query": "Excel spreadsheet first name last name country employee",
+      "expectedFiles": [
+        "file_example_XLS_50.xls",
+        "file_example_XLS_1000.xls",
+        "file_example_XLS_5000.xls",
+        "Exemplos_Folha_de_Calculo_101_A.xlsm"
+      ],
+      "group": "A",
+      "category": "filetype-expansion"
+    },
+    {
+      "query": "Excel macro-enabled workbook xlsm sample data",
+      "expectedFiles": ["Exemplos_Folha_de_Calculo_101_A.xlsm"],
+      "group": "A",
+      "category": "filetype-expansion"
+    },
+    {
+      "query": "exemplos folha de cálculo Excel com dados de funcionários",
+      "expectedFiles": ["Exemplos_Folha_de_Calculo_101_A.xlsm"],
+      "group": "A",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "5000 row Excel dataset stress test",
+      "expectedFiles": ["file_example_XLS_5000.xls"],
+      "group": "A",
+      "category": "filetype-expansion"
+    },
+
+    {
+      "query": "Connecticut bazaar raffle permit application nonprofit",
+      "expectedFiles": ["16626587.png"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "modern open-plan living room dining room interior render",
+      "expectedFiles": ["Fracção D0.4_Sala de Estar e Sala de Jantar_RF.jpg"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "render de sala de estar e sala de jantar apartamento moderno",
+      "expectedFiles": ["Fracção D0.4_Sala de Estar e Sala de Jantar_RF.jpg"],
+      "group": "C",
+      "category": "image-content-pt"
+    },
+    {
+      "query": "home office workspace wall-mounted desk metal grid shelving",
+      "expectedFiles": ["Fracção I0.3_Escritório_RF.jpg"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "render de escritório em apartamento secretária parede",
+      "expectedFiles": ["Fracção I0.3_Escritório_RF.jpg"],
+      "group": "C",
+      "category": "image-content-pt"
+    },
+    {
+      "query": "New York assisted living medical evaluation form DOH 3122",
+      "expectedFiles": ["pdf-form-24-medical-evaluation.jpg"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "Home Furnishings invoice template Auckland New Zealand",
+      "expectedFiles": ["downloadable-invoice-sample-in-word.png"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "Indian income tax Form 15H senior citizen declaration",
+      "expectedFiles": ["7c5b205539e72750abe56ae00015d3c1.jpg"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "Malaysian restaurant tax invoice receipt Hassanbistro Shah Alam",
+      "expectedFiles": ["An-example-of-scanned-receipt-from-SROIE-3-dataset.webp"],
+      "group": "A",
+      "category": "filetype-expansion-webp"
+    },
+    {
+      "query": "fatura de restaurante malaio recibo digitalizado GST",
+      "expectedFiles": ["An-example-of-scanned-receipt-from-SROIE-3-dataset.webp"],
+      "group": "A",
+      "category": "cross-language-pt-en"
+    },
+    {
+      "query": "SPECIMEN watermark government form red overlay",
+      "expectedFiles": ["15303481.png"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "Australian business invoice template GST orange building logo",
+      "expectedFiles": ["download-free-invoice-template-in-pdf.png"],
+      "group": "C",
+      "category": "image-content"
+    },
+    {
+      "query": "Transit Air Cargo freight invoice shipping document",
+      "expectedFiles": ["images.jpg"],
+      "group": "C",
+      "category": "image-content"
+    },
+
+    {
+      "query": "lorem ipsum sample PDF placeholder text testing",
+      "expectedFiles": [
+        "file-example_PDF_500_kB.pdf",
+        "file-example_PDF_1MB.pdf",
+        "file-sample_150kB.pdf"
+      ],
+      "category": "conceptual"
+    },
+
+    {
+      "query": "blockchain consensus algorithm proof of stake whitepaper",
+      "expectedFiles": [],
+      "category": "negative"
+    },
+    {
+      "query": "receita de lasanha à bolonhesa italiana com queijo ricota",
+      "expectedFiles": [],
+      "category": "negative-pt"
+    },
+    {
+      "query": "kubernetes pod scheduling helm chart deployment",
+      "expectedFiles": [],
+      "category": "negative"
+    },
+    {
+      "query": "soneto de Camões poesia portuguesa renascimento",
+      "expectedFiles": [],
+      "category": "negative-pt"
+    }
+  ]
+}

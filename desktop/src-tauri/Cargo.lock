@@ -5561,6 +5561,7 @@ dependencies = [
  "leptess",
  "log",
  "pdfium-render",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

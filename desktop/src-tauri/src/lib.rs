@@ -1,13 +1,13 @@
-mod config;
-mod db;
-mod errors;
-mod extractor;
-mod chunker;
-mod indexer;
-mod llm;
-mod platform;
+pub mod config;
+pub mod db;
+pub mod errors;
+pub mod extractor;
+pub mod chunker;
+pub mod indexer;
+pub mod llm;
+pub mod platform;
 #[path = "search.rs"]
-mod search_engine;
+pub mod search_engine;
 
 use std::path::PathBuf;
 use crate::config::RootPayload;

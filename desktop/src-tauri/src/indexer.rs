@@ -68,7 +68,7 @@ pub fn run(
 
 // ── internal (testable) ───────────────────────────────────────────────────────
 
-fn run_scan(
+pub fn run_scan(
     conn: &Connection,
     root_id: i64,
     root_path: &Path,

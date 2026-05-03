@@ -91,11 +91,16 @@ fn date_str_to_unix(s: &str) -> Option<i64> {
 
 /// Escape a user query for FTS5.
 ///
-/// Only embedded double-quote characters are escaped (doubled per FTS5 syntax).
-/// The query is NOT wrapped in outer quotes so that FTS5 tokenises it normally
-/// and honours any AND / OR / NOT operators the user typed.
+/// Wraps the query in double-quotes so FTS5 treats it as a phrase, preventing
+/// hyphens and accented tokens from being parsed as column references or
+/// operators (e.g. `deixe-se` → `column_deixe MINUS se`). Embedded
+/// double-quotes are doubled per FTS5 syntax.
+///
+/// Trade-off: explicit AND/OR/NOT operators typed by the user are silenced —
+/// they become literal search terms. Acceptable in v1 (hybrid path handles
+/// relevance). See technical-decisions.md §14 if this needs revisiting.
 fn fts5_escape(query: &str) -> String {
-    query.replace('"', "\"\"")
+    format!("\"{}\"", query.replace('"', "\"\""))
 }
 
 pub fn search_files(
