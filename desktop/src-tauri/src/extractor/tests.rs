@@ -156,6 +156,31 @@ fn test_extract_xls_larger_file() {
     assert!(!result.text.is_empty());
 }
 
+// ── XLSM — no external services required ─────────────────────────────────────
+
+#[test]
+fn test_extract_xlsm_returns_text() {
+    let path = fixtures().join("Exemplos_Folha_de_Calculo_101_A.xlsm");
+    let result = extract(&path, "http://localhost:11434").unwrap();
+    assert!(!result.text.is_empty(), "expected text from XLSM file");
+    assert!((result.confidence - 1.0).abs() < 1e-6);
+}
+
+// ── WebP — routing test (no Ollama required) ──────────────────────────────────
+
+#[test]
+fn test_extract_webp_routes_to_image_extractor() {
+    let path = fixtures().join("An-example-of-scanned-receipt-from-SROIE-3-dataset.webp");
+    // Port 19999 has nothing listening — triggers a connection error, not "unsupported file type".
+    match extract(&path, "http://127.0.0.1:19999") {
+        Err(crate::errors::AppError::Extractor(msg)) => {
+            assert!(!msg.contains("unsupported file type"),
+                "webp must be routed to image extractor, not rejected: {msg}");
+        }
+        _ => {} // success or LlmCall error — both confirm routing succeeded
+    }
+}
+
 // ── OCR unit tests — no external services required ────────────────────────────
 
 #[test]

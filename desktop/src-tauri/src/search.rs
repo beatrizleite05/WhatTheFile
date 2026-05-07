@@ -96,9 +96,7 @@ fn date_str_to_unix(s: &str) -> Option<i64> {
 /// operators (e.g. `deixe-se` → `column_deixe MINUS se`). Embedded
 /// double-quotes are doubled per FTS5 syntax.
 ///
-/// Trade-off: explicit AND/OR/NOT operators typed by the user are silenced —
-/// they become literal search terms. Acceptable in v1 (hybrid path handles
-/// relevance). See technical-decisions.md §14 if this needs revisiting.
+/// Trade-off: explicit AND/OR/NOT operators typed by the user are silenced
 fn fts5_escape(query: &str) -> String {
     format!("\"{}\"", query.replace('"', "\"\""))
 }
@@ -281,7 +279,10 @@ pub fn search_files(
 
             // ── Step 6: build snippet ─────────────────────────────────────────
             let best_chunk_id = vec_map.get(&file_id).map(|&(_, cid)| cid);
-            let snippet = build_snippet(conn, best_chunk_id, &extracted_text);
+            let snippet = build_snippet(
+                conn, file_id, &fts_rank_pos, &vec_rank_pos, &fts_term,
+                best_chunk_id, &extracted_text,
+            );
 
             let abs_path = std::path::Path::new(&root_path)
                 .join(&rel_path)
@@ -428,24 +429,79 @@ pub fn recent_files(
 
 fn build_snippet(
     conn: &Connection,
+    file_id: i64,
+    fts_rank_pos: &HashMap<i64, usize>,
+    vec_rank_pos: &HashMap<i64, usize>,
+    fts_term: &str,
     best_chunk_id: Option<i64>,
     extracted_text: &str,
 ) -> String {
-    // Use the best-scoring chunk from the vector retrieval pass when available.
-    // Fall back to the first chunk, then to extracted_text[:200].
-    if let Some(chunk_id) = best_chunk_id {
-        match conn.query_row(
+    let use_fts = match (fts_rank_pos.contains_key(&file_id), vec_rank_pos.contains_key(&file_id)) {
+        (true, false) => true,
+        (false, _)    => false,
+        // Both: FTS wins on tie (<=) so keyword matches get highlighted snippets
+        (true, true)  => fts_rank_pos[&file_id] <= vec_rank_pos[&file_id],
+    };
+
+    let raw = if use_fts {
+        conn.query_row(
+            "SELECT snippet(files_fts, 2, ?1, ?2, '...', 30) \
+             FROM files_fts WHERE files_fts MATCH ?3 AND files_fts.rowid = ?4",
+            params!["\x01", "\x02", fts_term, file_id],
+            |r| r.get::<_, String>(0),
+        ).unwrap_or_else(|e| {
+            log::warn!("FTS snippet() failed for file_id={file_id}: {e}");
+            extracted_text.chars().take(200).collect()
+        })
+    } else if let Some(chunk_id) = best_chunk_id {
+        conn.query_row(
             "SELECT text FROM chunks WHERE id = ?1",
             params![chunk_id],
             |r| r.get::<_, String>(0),
-        ) {
-            Ok(t) => return t.chars().take(200).collect(),
-            Err(e) => {
-                log::warn!("snippet lookup failed for chunk_id={chunk_id}: {e}");
-            }
+        ).map(|t| first_sentences(&t, 200))
+        .unwrap_or_else(|e| {
+            log::warn!("snippet chunk lookup failed for chunk_id={chunk_id}: {e}");
+            extracted_text.chars().take(200).collect()
+        })
+    } else {
+        extracted_text.chars().take(200).collect()
+    };
+
+    format_snippet(&raw)
+}
+
+/// Returns first sentence(s) of `text`, up to `max_chars` chars.
+fn first_sentences(text: &str, max_chars: usize) -> String {
+    let over: String = text.chars().take(max_chars * 2).collect();
+    let mut last = 0;
+    for (i, c) in over.char_indices() {
+        if matches!(c, '.' | '!' | '?') {
+            let end = i + 1;
+            if end <= max_chars { last = end; }
         }
     }
-    extracted_text.chars().take(200).collect()
+    if last > 0 {
+        over[..last].trim().to_string()
+    } else {
+        text.chars().take(max_chars).collect()
+    }
+}
+
+/// HTML-escapes `raw` and converts \x01/\x02 FTS delimiters to `<mark>...</mark>`.
+fn format_snippet(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 32);
+    for ch in raw.chars() {
+        match ch {
+            '\x01' => out.push_str("<mark>"),
+            '\x02' => out.push_str("</mark>"),
+            '<'    => out.push_str("&lt;"),
+            '>'    => out.push_str("&gt;"),
+            '&'    => out.push_str("&amp;"),
+            '"'    => out.push_str("&quot;"),
+            c      => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

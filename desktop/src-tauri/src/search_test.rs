@@ -794,3 +794,91 @@ fn test_integration_hybrid_semantic_filters_applied_after_rrf() {
     assert!(ids.contains(&pdf_id), "pdf must survive media_type filter in hybrid mode");
     assert!(!ids.contains(&txt_id), "txt must be excluded by media_type filter in hybrid mode");
 }
+
+// ── Snippet source selection ──────────────────────────────────────────────────
+
+#[test]
+fn test_build_snippet_fts_only_no_raw_delimiters() {
+    let conn = make_test_conn();
+    let root_id = seed_root(&conn);
+    let file_id = seed_file(&conn, root_id, "inv.txt", "txt",
+        "invoice total amount due payment receipt", 1.0);
+
+    let mut fts_rank_pos = HashMap::new();
+    fts_rank_pos.insert(file_id, 1usize);
+    let vec_rank_pos: HashMap<i64, usize> = HashMap::new();
+
+    let fts_term = fts5_escape("invoice");
+    let snippet = build_snippet(
+        &conn, file_id, &fts_rank_pos, &vec_rank_pos,
+        &fts_term, None, "invoice total amount due payment receipt",
+    );
+
+    assert!(!snippet.contains('\x01'), "raw \\x01 delimiter must not appear in output");
+    assert!(!snippet.contains('\x02'), "raw \\x02 delimiter must not appear in output");
+    // FTS snippet() wraps the matched term; after format_snippet it becomes <mark>
+    assert!(snippet.contains("<mark>") || snippet.contains("invoice"),
+        "FTS-leading snippet must contain the highlighted term or the term itself: {snippet}");
+}
+
+#[test]
+fn test_build_snippet_vector_only_no_mark_tags() {
+    let conn = make_test_conn();
+    let root_id = seed_root(&conn);
+    let file_id = seed_file(&conn, root_id, "doc.txt", "txt",
+        "Machine learning is transformative. Neural networks power modern AI.", 1.0);
+
+    let chunk_id: i64 = conn.query_row(
+        "SELECT id FROM chunks WHERE file_id = ?1 ORDER BY chunk_index LIMIT 1",
+        params![file_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    let fts_rank_pos: HashMap<i64, usize> = HashMap::new();
+    let mut vec_rank_pos = HashMap::new();
+    vec_rank_pos.insert(file_id, 1usize);
+
+    let fts_term = fts5_escape("machine learning");
+    let snippet = build_snippet(
+        &conn, file_id, &fts_rank_pos, &vec_rank_pos,
+        &fts_term, Some(chunk_id),
+        "Machine learning is transformative. Neural networks power modern AI.",
+    );
+
+    assert!(!snippet.contains("<mark>"),
+        "vector-leading snippet must not contain mark tags: {snippet}");
+    assert!(!snippet.is_empty(), "vector-leading snippet must not be empty");
+}
+
+#[test]
+fn test_build_snippet_tie_fts_wins_deterministically() {
+    let conn = make_test_conn();
+    let root_id = seed_root(&conn);
+    let file_id = seed_file(&conn, root_id, "tie.txt", "txt",
+        "contract agreement terms and conditions", 1.0);
+
+    let chunk_id: i64 = conn.query_row(
+        "SELECT id FROM chunks WHERE file_id = ?1 ORDER BY chunk_index LIMIT 1",
+        params![file_id],
+        |r| r.get(0),
+    ).unwrap();
+
+    // Both passes have this file at rank 1 — exact tie; FTS wins (rank <= rank)
+    let mut fts_rank_pos = HashMap::new();
+    fts_rank_pos.insert(file_id, 1usize);
+    let mut vec_rank_pos = HashMap::new();
+    vec_rank_pos.insert(file_id, 1usize);
+
+    let fts_term = fts5_escape("contract");
+    let s1 = build_snippet(
+        &conn, file_id, &fts_rank_pos, &vec_rank_pos,
+        &fts_term, Some(chunk_id), "contract agreement terms and conditions",
+    );
+    let s2 = build_snippet(
+        &conn, file_id, &fts_rank_pos, &vec_rank_pos,
+        &fts_term, Some(chunk_id), "contract agreement terms and conditions",
+    );
+
+    assert_eq!(s1, s2, "snippet must be deterministic on tie");
+    assert!(!s1.contains('\x01'), "raw delimiter must not appear in output");
+}

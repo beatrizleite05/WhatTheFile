@@ -42,7 +42,7 @@ Status legend: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## Commit 3 — Group A: snippet rework + file-type expansion  ☐
+## Commit 3 — Group A: snippet rework + file-type expansion  ☑
 
 **Goal:** zero-reindex relevance UX improvements + scope additions.
 

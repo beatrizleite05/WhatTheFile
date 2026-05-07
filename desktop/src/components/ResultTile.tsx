@@ -3,6 +3,13 @@ import { FileText, FileSpreadsheet, Image, File } from 'lucide-react';
 import { formatBytes, formatRelativeTime, dirname } from '../utils';
 import type { FileResult } from '../core/types';
 
+function parseHighlighted(snippet: string): React.ReactNode[] {
+  const parts = snippet.split(/<mark>|<\/mark>/);
+  return parts.map((part, i) =>
+    i % 2 === 1 ? <mark key={i}>{part}</mark> : part
+  );
+}
+
 interface ResultTileProps {
   result: FileResult;
   isSelected: boolean;
@@ -17,7 +24,7 @@ function MediaIcon({ mediaType }: { mediaType: string }) {
   const style = { flexShrink: 0 };
   if (t === 'pdf') return <FileText size={size} style={style} />;
   if (t === 'xlsx' || t === 'csv') return <FileSpreadsheet size={size} style={style} />;
-  if (t === 'png' || t === 'jpg' || t === 'jpeg') return <Image size={size} style={style} />;
+  if (t === 'png' || t === 'jpg' || t === 'jpeg' || t === 'webp') return <Image size={size} style={style} />;
   return <File size={size} style={style} />;
 }
 
@@ -70,7 +77,7 @@ export function ResultTile({ result, isSelected, onSelect, onOpen, style }: Resu
           lineHeight: 1.4,
           margin: 0,
         }}>
-          {result.snippet}
+          {parseHighlighted(result.snippet)}
         </p>
       )}
 

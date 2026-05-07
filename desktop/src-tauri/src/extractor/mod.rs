@@ -29,10 +29,10 @@ pub fn extract(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError>
         "txt" => extract_txt(path),
         "md" => extract_md(path),
         "csv" => extract_csv(path),
-        "xlsx" | "xls" => extract_xlsx(path),
+        "xlsx" | "xls" | "xlsm" => extract_xlsx(path),
         "docx" => extract_docx(path),
         "pdf" => pdf::extract_pdf(path, ollama_url),
-        "png" | "jpg" | "jpeg" => extract_image(path, ollama_url),
+        "png" | "jpg" | "jpeg" | "webp" => extract_image(path, ollama_url),
         _ => Err(AppError::Extractor(format!(
             "unsupported file type: {}",
             path.display()

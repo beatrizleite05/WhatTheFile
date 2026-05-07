@@ -29,6 +29,7 @@ export function mediaTypeLabel(mediaType: string): string {
     png: 'PNG',
     jpg: 'JPEG',
     jpeg: 'JPEG',
+    webp: 'WebP',
   };
   return labels[mediaType.toLowerCase()] ?? mediaType.toUpperCase();
 }
@@ -48,7 +49,7 @@ export function pillColorVar(tokenType: PillType): { bg: string; text: string } 
 export function mediaTypePillColors(mediaType: string): { bg: string; text: string } {
   const t = mediaType.toLowerCase();
   if (t === 'pdf') return { bg: 'var(--pill-pdf-bg)', text: 'var(--pill-pdf-text)' };
-  if (t === 'png' || t === 'jpg' || t === 'jpeg') return { bg: 'var(--pill-image-bg)', text: 'var(--pill-image-text)' };
+  if (t === 'png' || t === 'jpg' || t === 'jpeg' || t === 'webp') return { bg: 'var(--pill-image-bg)', text: 'var(--pill-image-text)' };
   if (t === 'xlsx' || t === 'csv') return { bg: 'var(--pill-sheet-bg)', text: 'var(--pill-sheet-text)' };
   if (t === 'txt' || t === 'md') return { bg: 'var(--pill-text-bg)', text: 'var(--pill-text-text)' };
   return { bg: 'var(--pill-doc-bg)', text: 'var(--pill-doc-text)' };

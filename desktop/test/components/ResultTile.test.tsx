@@ -51,4 +51,20 @@ describe('ResultTile', () => {
     const tile = screen.getByTestId('result-tile');
     expect(tile).toHaveAttribute('data-selected', 'true');
   });
+
+  it('renders highlighted snippet segments as real mark elements', () => {
+    const r: FileResult = { ...result, snippet: 'Invoice for <mark>services</mark> rendered' };
+    render(<ResultTile result={r} isSelected={false} onSelect={vi.fn()} onOpen={vi.fn()} />);
+    const markEl = document.querySelector('mark');
+    expect(markEl).not.toBeNull();
+    expect(markEl?.textContent).toBe('services');
+  });
+
+  it('does not render literal mark tag strings in text content', () => {
+    const r: FileResult = { ...result, snippet: 'total <mark>amount</mark> due' };
+    render(<ResultTile result={r} isSelected={false} onSelect={vi.fn()} onOpen={vi.fn()} />);
+    expect(document.body.textContent).not.toContain('<mark>');
+    const markEl = document.querySelector('mark');
+    expect(markEl?.textContent).toBe('amount');
+  });
 });
