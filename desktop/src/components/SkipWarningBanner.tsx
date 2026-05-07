@@ -8,6 +8,12 @@ interface SkipWarningBannerProps {
 export function SkipWarningBanner({ visible }: SkipWarningBannerProps) {
   if (!visible) return null;
 
+  function handleOpenSettings() {
+    openSettings().catch((error) => {
+      console.error('Failed to open settings window', error);
+    });
+  }
+
   return (
     <div
       role="status"
@@ -29,7 +35,7 @@ export function SkipWarningBanner({ visible }: SkipWarningBannerProps) {
         Search quality is limited until you add at least one folder scope.
       </span>
       <button
-        onClick={() => openSettings().catch(() => {})}
+        onClick={handleOpenSettings}
         style={{
           border: '1px solid var(--status-warning-border)',
           background: 'transparent',

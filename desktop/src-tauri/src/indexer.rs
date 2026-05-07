@@ -11,6 +11,29 @@ use crate::{chunker, db, errors::AppError, extractor, llm};
 // in src/core/policy.ts and enforced by the tests in test/policy.spec.ts.
 const MAX_FILE_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 
+// Directories whose contents are never useful to index. Matched by directory name only.
+const JUNK_DIRS: &[&str] = &[
+    "node_modules", ".git", ".svn", ".hg",
+    "dist", "build", "out", "target", "coverage",
+    "vendor", ".cache", "__pycache__",
+    ".next", ".nuxt", ".svelte-kit",
+    "venv", ".venv", "env", "site-packages",
+    ".eggs", ".pytest_cache", ".mypy_cache",
+];
+
+// Presence of any of these files/dirs in a directory marks it as a code repository root.
+// Files within any ancestor that is a code repo receive a reduced confidence score.
+const REPO_MARKERS: &[&str] = &[
+    ".git", "package.json", "Cargo.toml", "go.mod",
+    "pyproject.toml", "setup.py", "composer.json",
+    "pom.xml", "build.gradle", "build.gradle.kts",
+    "Makefile", "CMakeLists.txt",
+];
+
+// Confidence multiplier applied to files found inside a code repository tree.
+// A README.md in a repo still appears in results but ranks below standalone documents.
+const REPO_CONFIDENCE_FACTOR: f32 = 0.5;
+
 fn detect_media_type(filename: &str) -> Option<&'static str> {
     let ext = Path::new(filename)
         .extension()
@@ -20,11 +43,13 @@ fn detect_media_type(filename: &str) -> Option<&'static str> {
         Some("pdf")  => Some("pdf"),
         Some("docx") => Some("docx"),
         Some("xlsx") => Some("xlsx"),
+        Some("xlsm") => Some("xlsx"),
         Some("csv")  => Some("csv"),
         Some("txt")  => Some("txt"),
         Some("md")   => Some("md"),
         Some("png")  => Some("png"),
         Some("jpg") | Some("jpeg") => Some("jpg"),
+        Some("webp") => Some("webp"),
         _ => None,
     }
 }
@@ -46,6 +71,32 @@ struct FileCandidate {
     size_bytes: i64,
     mtime_ns: i64,
     previously_existed: bool,
+}
+
+/// Returns true if `dir` contains any file or directory that is a repo marker.
+fn is_repo_root(dir: &Path) -> bool {
+    REPO_MARKERS.iter().any(|marker| dir.join(marker).exists())
+}
+
+/// Walks ancestors of `file_path` up to (but not including) `root` and returns
+/// true if any ancestor directory contains a repo marker.
+fn file_is_in_code_repo(file_path: &Path, root: &Path) -> bool {
+    let mut dir = file_path.parent().unwrap_or(root);
+    loop {
+        if is_repo_root(dir) {
+            return true;
+        }
+        if dir == root || dir.parent().is_none() {
+            break;
+        }
+        // Unwrap is safe: we checked parent().is_none() above.
+        dir = dir.parent().unwrap();
+        // Stop if we've gone above the root.
+        if !dir.starts_with(root) {
+            break;
+        }
+    }
+    false
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
@@ -159,7 +210,12 @@ fn run_discovery(
         .filter_entry(|e| {
             if e.depth() > 0 {
                 if let Some(name) = e.file_name().to_str() {
+                    // Skip hidden entries (files and directories).
                     if name.starts_with('.') {
+                        return false;
+                    }
+                    // Skip known junk directories entirely — never descend into them.
+                    if e.file_type().is_dir() && JUNK_DIRS.contains(&name) {
                         return false;
                     }
                 }
@@ -330,7 +386,13 @@ fn run_extraction(
                     .map(|(i, c)| (i, c.text.as_str(), embedding_blobs[i].as_deref()))
                     .collect();
 
-                db::update_file_content(conn, file_id, &result.text, result.confidence, &result.lang_hint, "ext-v1", now)?;
+                // Files inside a code repository are ranked lower than standalone documents.
+                let confidence = if file_is_in_code_repo(&abs_path, root_path) {
+                    result.confidence * REPO_CONFIDENCE_FACTOR
+                } else {
+                    result.confidence
+                };
+                db::update_file_content(conn, file_id, &result.text, confidence, &result.lang_hint, "ext-v1", now)?;
                 db::replace_chunks(conn, file_id, &chunk_pairs)?;
             }
             Err(_) => {

@@ -66,7 +66,8 @@
 | `indexer.rs` | Two-phase incremental indexing, blake3 fingerprinting, move detection, cooperative cancellation | Write to source directories |
 | `extractor.rs` | Text extraction from PDF, DOCX, XLSX, CSV, TXT, MD — returns raw text per file | Chunk or embed; single responsibility |
 | `chunker.rs` | Split raw text into overlapping windows — deterministic, no side effects | Call extractor or embeddings; pure function |
-| `embeddings.rs` | Generate embeddings via Ollama (`nomic-embed-text`) for text chunks and image descriptions | Store to DB directly |
+| `embeddings.rs` | Generate embeddings via Ollama for text chunks and image descriptions. Applies `search_query:` / `search_document:` prefixes per the per-model `EmbeddingModel` config. L2-normalises output unconditionally | Store to DB directly; assume nomic-specific behaviour |
+| `bin/eval.rs` | Native eval binary — runs the curated corpus through `search_files()` and emits per-query JSON for the TS metrics consumer | Be linked into the Tauri shell or any production code path |
 | `vision.rs` | Decode image → Ollama vision description → text for embedding pipeline | Store or embed directly |
 | `search.rs` | FTS + vector retrieval, BM25 + cosine score blending, top-K result assembly | Write to DB |
 | `db.rs` | Schema, migrations, upsert/move/delete, index job checkpointing, raw reads | Contain ranking or retrieval logic |
@@ -82,7 +83,7 @@
 | `queryParser.ts` | Parse natural language into structured intent (queryText, mediaTypes, date range, root scope, minConfidence) | Call LLM directly — deterministic core only |
 | `ranking.ts` | Display-layer sorting/filtering of already-ranked results from Rust | Perform score blending — that lives in `search.rs` |
 | `pagination.ts` | Normalize limit/offset, apply safety caps for UI responsiveness | Execute queries |
-| `metrics.ts` | Offline evaluation utilities (Recall@K, MRR, NDCG) for benchmarks | Touch the runtime query path |
+| `metrics.ts` | Offline evaluation utilities (Recall@K, MRR, NDCG). Consumes per-query JSON emitted by `src-tauri/src/bin/eval.rs` and produces `test/fixtures/eval-results/<sha>.json` | Touch the runtime query path |
 
 ---
 
@@ -177,7 +178,7 @@ shared/                           Reserved — shared schemas and contracts
 ## Stack
 
 - **Desktop shell:** Tauri (macOS + Windows v1; Linux post-MVP)
-- **Embedding provider:** Ollama local — `nomic-embed-text` for text; `qwen2.5vl:7b` (fallback: `llava:7b`) describes images → embedded with `nomic-embed-text`
+- **Embedding provider:** Ollama local. v1 default: `nomic-embed-text-v2-moe` (768-dim) for text; `qwen2.5vl:7b` (fallback `llava:7b`) describes images → fed back through the text embedding pipeline. Model-agnostic per-model config (see [technical-decisions.md](technical-decisions.md) §7).
 - **Index:** SQLite + `sqlite-vec` — single file, metadata + FTS5 + vector table, atomic writes — see [db-schema.md](db-schema.md) for full schema, DDL, and key patterns
 - **Background runtime:** Incremental indexing on app open — background service is post-v1 roadmap
 

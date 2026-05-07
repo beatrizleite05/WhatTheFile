@@ -304,3 +304,69 @@ fn test_large_batch_completes_without_panic() {
     ).unwrap();
     assert_eq!(count, 500);
 }
+
+#[test]
+fn test_junk_directories_are_not_indexed() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir_all(root_dir.join("node_modules/lodash")).unwrap();
+    std::fs::create_dir_all(root_dir.join("dist")).unwrap();
+    std::fs::create_dir_all(root_dir.join("src")).unwrap();
+    write_file(&root_dir, "README.txt", "top-level readme");
+    write_file(&root_dir.join("node_modules/lodash"), "index.txt", "lodash source");
+    write_file(&root_dir.join("dist"), "bundle.txt", "minified bundle");
+    write_file(&root_dir.join("src"), "main.txt", "application source");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
+        params![root.id],
+        |r| r.get(0),
+    ).unwrap();
+    // Only README.txt and src/main.txt should be indexed; node_modules and dist are excluded.
+    assert_eq!(count, 2, "expected 2 files; node_modules and dist must be skipped");
+}
+
+#[test]
+fn test_file_in_code_repo_gets_reduced_confidence() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    let repo_dir = root_dir.join("myrepo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+
+    // Mark repo_dir as a code repository root via package.json.
+    write_file(&repo_dir, "package.json", r#"{"name":"test"}"#);
+    write_file(&repo_dir, "README.txt", "project readme");
+
+    // A standalone file at the root level (no repo marker in ancestors).
+    write_file(&root_dir, "standalone.txt", "standalone document");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+
+    let rows: Vec<(String, f32)> = {
+        let mut stmt = conn.prepare(
+            "SELECT rel_path, confidence FROM files WHERE root_id = ?1 AND deleted_at IS NULL ORDER BY rel_path",
+        ).unwrap();
+        stmt.query_map(params![root.id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+
+    let readme = rows.iter().find(|(p, _)| p.contains("README")).expect("README.txt must be indexed");
+    let standalone = rows.iter().find(|(p, _)| p.contains("standalone")).expect("standalone.txt must be indexed");
+
+    assert!(
+        readme.1 < standalone.1,
+        "README in repo (confidence={}) must be lower than standalone doc (confidence={})",
+        readme.1, standalone.1,
+    );
+    assert!(
+        (standalone.1 - 1.0_f32).abs() < 1e-5,
+        "standalone.txt confidence must be 1.0, got {}",
+        standalone.1,
+    );
+}

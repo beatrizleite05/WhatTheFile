@@ -1,6 +1,6 @@
 use crate::errors::AppError;
 
-pub const OLLAMA_BASE_URL: &str = "http://localhost:11434";
+pub const OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 
 const KNOWN_MODELS: &[&str] = &["nomic-embed-text-v2-moe", "qwen2.5vl:7b", "llava:7b"];
 

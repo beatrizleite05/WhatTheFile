@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "WhatTheFile — local-first semantic file search"
 authors = []
 edition = "2021"
+default-run = "whatthefile"
 
 [lib]
 name = "whatthefile_lib"

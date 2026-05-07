@@ -9,7 +9,8 @@
 
 **Processing and indexing**
 - Extract and normalize content for all supported media types in MVP.
-- Chunking constants (in `chunker.rs`): window `256 tokens`, overlap `32 tokens` — not user-configurable.
+- Chunking constants (in `chunker.rs` and `chunker.ts`): window `512 tokens`, overlap `64 tokens` — not user-configurable.
+- Embeddings: every chunk text is prefixed with `search_document: ` before embedding; every query is prefixed with `search_query: `. L2-normalise output unconditionally before storing or comparing. Use `vec_distance_cosine` explicitly.
 - Dual retrieval: keyword/FTS + semantic vector.
 - Default ranking: RRF — `score = 1/(60 + rank_fts) + 1/(60 + rank_vec)`.
 - Search mode is caller-specified via `SearchRequest.mode`: `hybrid` (default) | `keyword` | `semantic`.
@@ -86,12 +87,28 @@ New tool modes (e.g. `DuplicatesView`, `PdfPasswordsView`) must be **self-contai
 
 **What each layer tests:**
 
-| Layer | Scope |
-|---|---|
-| Pure logic (TS `src/core/`) | Unit — behavior only, no I/O, no mocks |
-| Rust modules | Unit — per-function in `#[cfg(test)]`; integration tests against a real in-memory SQLite |
-| Tauri commands (`lib.rs`) | Integration — real DB, stubbed Ollama |
-| Frontend components | Behavior via React Testing Library — no snapshot tests |
+| Layer | Scope | Where it runs |
+|---|---|---|
+| Pure logic (TS `src/core/`) | Unit — behaviour only, no I/O, no mocks | CI + local |
+| Rust modules | Unit — per-function in `#[cfg(test)]`; integration against in-memory SQLite | CI + local |
+| Tauri commands (`lib.rs`) | Integration — real DB, **live Ollama** (gated by `live-ollama` feature) | Local pre-push only |
+| Frontend integration | Real Tauri shell + DB; live Ollama | Local pre-push only |
+| Frontend components | Behaviour via React Testing Library — no snapshot tests | CI + local |
+| E2E | `tauri-driver` + WebDriverIO; ≤10 happy-path scenarios | Local pre-push only |
+| Eval harness | Native Rust binary feeds curated corpus into real `search_files()`; emits per-query JSON; TS metrics consumer computes Recall@K, MRR, NDCG | Local pre-push only |
+
+**CI gate (every PR):** `npm test` + `cargo test` (no `live-ollama`) + `npx tsc --noEmit` + `cargo clippy` + `cargo fmt --check`. Fast (<2 min), no Ollama dependency.
+
+**Local pre-push gate (developer's Mac):** everything above plus `cargo test --features live-ollama`, `npm run test:integration`, `npm run test:e2e`, `npm run eval`, `npm run eval:diff`. Live Ollama is the only honest target environment for this product.
+
+**Coverage target:** 80% line coverage on `src/core/` and `src-tauri/src/`. Excludes `lib.rs` Tauri command glue, `platform/`, `bin/` (eval binary). Verified by `vitest --coverage` and `cargo tarpaulin`.
+
+**Pre-push hook:** versioned shell script at `scripts/git-hooks/pre-push`, installed via `npm run setup` (one-line symlink). No husky.
+
+**Eval workflow:**
+- `npm run eval` — runs corpus, writes `test/fixtures/eval-results/<YYYY-MM-DD>-<sha>.json`.
+- `npm run eval:diff` — compares latest run to `baseline.json`; **fails the push** if Recall@10 OR MRR drops by >5% absolute.
+- `npm run eval:promote` — manually copies the latest run to `baseline.json` after the developer reviews deltas. Append a note to `HISTORY.md`.
 
 **Test quality rules:**
 - Test behavior, not implementation. If renaming an internal variable breaks a test, the test is wrong.

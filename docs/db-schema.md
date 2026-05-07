@@ -81,7 +81,7 @@ sqlite_vec::sqlite3_vec_init(conn.handle())?;
 │      chunks_vec (vec0)  │
 │─────────────────────────│
 │ PK  chunk_id   INTEGER  │  ← maps to chunks.id
-│     embedding  FLOAT[64]│  ← stored as little-endian f32 blob
+│     embedding  FLOAT[768]│  ← stored as little-endian f32 blob
 │  (KNN via MATCH / k =N) │
 └─────────────────────────┘
 
@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
   chunk_id  INTEGER PRIMARY KEY,
-  embedding FLOAT[64]
+  embedding FLOAT[768]
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(

@@ -43,7 +43,7 @@ Personal users.
 
 ### 4.2 File Types
 
-`pdf`, `docx`, `xlsx`, `csv`, `txt`, `md`, `png`, `jpg`/`jpeg`
+`pdf`, `docx`, `xlsx`, `xls`, `xlsm`, `csv`, `txt`, `md`, `png`, `jpg`/`jpeg`, `webp`
 
 Spreadsheet behavior: file-level retrieval.
 
@@ -78,7 +78,7 @@ Duplicates are listed separately in search results.
 ## 8. Extensibility
 
 - Architecture must support adding audio/video later without breaking the existing indexed data model.
-- OCR and text handling must prioritize `pt-BR` and `en` while keeping multilingual expansion possible.
+- OCR and text handling must prioritize `pt-BR` and `en` while keeping multilingual expansion possible. Cross-language semantic matching is delegated to the multilingual embedding model — no translation dictionary.
 
 ## 9. Out of Scope (MVP)
 
