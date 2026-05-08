@@ -46,7 +46,7 @@ describe('SettingsView', () => {
   });
 
   it('renders main settings sections', () => {
-    render(<SettingsView />);
+    render(<SettingsView onBack={vi.fn()} onResetOnboarding={vi.fn()} />);
     expect(screen.getByRole('heading', { name: /Settings/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Indexed Folders/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Activity Log/i })).toBeInTheDocument();
@@ -54,13 +54,13 @@ describe('SettingsView', () => {
   });
 
   it('renders activity entries from indexing jobs', () => {
-    render(<SettingsView />);
+    render(<SettingsView onBack={vi.fn()} onResetOnboarding={vi.fn()} />);
     expect(screen.getByText(/Root #2/i)).toBeInTheDocument();
     expect(screen.getByText(/\+5 added/i)).toBeInTheDocument();
   });
 
   it('renders delete index action', () => {
-    render(<SettingsView />);
+    render(<SettingsView onBack={vi.fn()} onResetOnboarding={vi.fn()} />);
     expect(screen.getByRole('button', { name: /Delete all indexed data/i })).toBeInTheDocument();
   });
 });

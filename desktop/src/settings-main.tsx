@@ -1,10 +1,2 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import { SettingsView } from './components/SettingsView';
-import './styles/global.css';
-
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <SettingsView />
-  </React.StrictMode>
-);
+// Settings are now rendered inline in App.tsx — this entry point is unused.
+export {};

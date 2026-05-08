@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for WhatTheFile",
-  "windows": ["main", "settings"],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -11,6 +11,16 @@
     "core:window:allow-center",
     "core:window:allow-set-focus",
     "core:window:allow-set-always-on-top",
-    "core:path:default"
+    "core:path:default",
+    "allow-search",
+    "allow-get-recent-files",
+    "allow-start-indexing",
+    "allow-add-root",
+    "allow-list-roots",
+    "allow-remove-root",
+    "allow-delete-index",
+    "allow-open-file",
+    "allow-get-runtime-status",
+    "allow-parse-query"
   ]
 }

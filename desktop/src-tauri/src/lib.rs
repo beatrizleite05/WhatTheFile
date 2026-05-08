@@ -34,17 +34,10 @@ pub fn run() {
                     .map_err(|e| e.to_string())?;
             }
 
-            // Spotlight behaviour: hide the main window when it loses focus,
-            // unless focus moved to the settings window.
+            // Spotlight behaviour: hide the main window when it loses focus.
             let win = main_window.clone();
-            let app_handle = app.handle().clone();
             main_window.on_window_event(move |event| {
                 if let tauri::WindowEvent::Focused(false) = event {
-                    if let Some(settings) = app_handle.get_webview_window("settings") {
-                        if settings.is_focused().unwrap_or(false) {
-                            return;
-                        }
-                    }
                     let _ = win.hide();
                 }
             });

@@ -1,18 +1,12 @@
 import { AlertTriangle } from 'lucide-react';
-import { openSettings } from '../api/runtime';
 
 interface SkipWarningBannerProps {
   visible: boolean;
+  onOpenSettings: () => void;
 }
 
-export function SkipWarningBanner({ visible }: SkipWarningBannerProps) {
+export function SkipWarningBanner({ visible, onOpenSettings }: SkipWarningBannerProps) {
   if (!visible) return null;
-
-  function handleOpenSettings() {
-    openSettings().catch((error) => {
-      console.error('Failed to open settings window', error);
-    });
-  }
 
   return (
     <div
@@ -35,7 +29,7 @@ export function SkipWarningBanner({ visible }: SkipWarningBannerProps) {
         Search quality is limited until you add at least one folder scope.
       </span>
       <button
-        onClick={handleOpenSettings}
+        onClick={onOpenSettings}
         style={{
           border: '1px solid var(--status-warning-border)',
           background: 'transparent',

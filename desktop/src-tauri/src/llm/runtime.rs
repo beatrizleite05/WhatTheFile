@@ -11,12 +11,11 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Lightweight agent for health checks — short timeouts so the UI
-/// doesn't stall waiting for a busy or slow Ollama instance.
+/// Lightweight agent for health checks — tolerant enough for a warming Ollama.
 fn health_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(2))
-        .timeout_read(std::time::Duration::from_secs(3))
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(5))
         .build()
 }
 

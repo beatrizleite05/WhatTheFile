@@ -6,12 +6,13 @@ import { fadeIn } from '../styles/animations';
 interface OllamaBannerProps {
   reachable: boolean;
   modelsLoaded: string[];
+  loading: boolean;
 }
 
-export function OllamaBanner({ reachable }: OllamaBannerProps) {
+export function OllamaBanner({ reachable, loading }: OllamaBannerProps) {
   const [dismissed, setDismissed] = useState(false);
 
-  if (reachable || dismissed) return null;
+  if (loading || reachable || dismissed) return null;
 
   return (
     <motion.div

@@ -7,7 +7,7 @@ import { OllamaBanner } from './OllamaBanner';
 import { SkipWarningBanner } from './SkipWarningBanner';
 import { IndexingProgress } from './IndexingProgress';
 import { Settings } from 'lucide-react';
-import { openFile, openSettings } from '../api/runtime';
+import { openFile } from '../api/runtime';
 import { removeFirstToken } from '../utils';
 import type { UseSearchReturn } from '../hooks/useSearch';
 import type { UseIndexingReturn } from '../hooks/useIndexing';
@@ -19,17 +19,16 @@ interface FramelessOverlayProps {
   indexing: UseIndexingReturn;
   ollamaStatus: UseOllamaStatusReturn;
   showSkipWarning?: boolean;
+  onOpenSettings: () => void;
 }
 
-export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarning = false }: FramelessOverlayProps) {
+export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarning = false, onOpenSettings }: FramelessOverlayProps) {
   const [previewResult, setPreviewResult] = useState<FileResult | null>(null);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const gridRef = useRef<ResultGridHandle>(null);
 
   function handleOpenSettings() {
-    openSettings().catch((error) => {
-      console.error('Failed to open settings window', error);
-    });
+    onOpenSettings();
   }
 
   function handleRemovePill(field: keyof ParsedQuery, value: string) {
@@ -80,16 +79,26 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
         overflow: 'hidden',
       }}
     >
-      {/* Drag region — gear button sits outside the drag surface */}
-      <div style={{ position: 'relative', height: 28, flexShrink: 0 }}>
-        <div data-tauri-drag-region style={{ position: 'absolute', inset: 0, cursor: 'default' }} />
+      {/* Drag region stops before the gear button area (32px from right) */}
+      <div style={{ position: 'relative', height: 48, flexShrink: 0 }}>
+        <div
+          data-tauri-drag-region
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 64,
+            cursor: 'default',
+          }}
+        />
         <button
           aria-label="Open settings"
           onClick={handleOpenSettings}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenSettings(); }}
           style={{
             position: 'absolute',
-            right: 10,
+            right: 20,
             top: '50%',
             transform: 'translateY(-50%)',
             background: 'none',
@@ -105,8 +114,8 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
         </button>
       </div>
 
-      <OllamaBanner reachable={ollamaStatus.reachable} modelsLoaded={ollamaStatus.modelsLoaded} />
-      <SkipWarningBanner visible={showSkipWarning} />
+      <OllamaBanner reachable={ollamaStatus.reachable} modelsLoaded={ollamaStatus.modelsLoaded} loading={ollamaStatus.loading} />
+      <SkipWarningBanner visible={showSkipWarning} onOpenSettings={onOpenSettings} />
 
       <div style={{ padding: '0 0 8px', flexShrink: 0 }}>
         <SearchBar

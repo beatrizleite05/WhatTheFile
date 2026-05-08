@@ -25,16 +25,6 @@
         "center": true,
         "visible": true,
         "skipTaskbar": true
-      },
-      {
-        "label": "settings",
-        "title": "WhatTheFile \u2014 Settings",
-        "url": "settings.html",
-        "width": 640,
-        "height": 520,
-        "resizable": false,
-        "decorations": true,
-        "visible": false
       }
     ],
     "security": {

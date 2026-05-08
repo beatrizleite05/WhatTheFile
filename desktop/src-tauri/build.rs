@@ -1,3 +1,19 @@
 fn main() {
-    tauri_build::build()
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(
+            tauri_build::AppManifest::new().commands(&[
+                "search",
+                "get_recent_files",
+                "start_indexing",
+                "add_root",
+                "list_roots",
+                "remove_root",
+                "delete_index",
+                "open_file",
+                "get_runtime_status",
+                "parse_query",
+            ]),
+        ),
+    )
+    .unwrap();
 }
