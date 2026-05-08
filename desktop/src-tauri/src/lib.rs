@@ -122,12 +122,7 @@ async fn delete_index(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
-        conn.execute_batch(
-            "DELETE FROM files;
-             DELETE FROM index_jobs;",
-        )
-        .map_err(|e| e.to_string())?;
-        Ok::<(), String>(())
+        db::clear_index(&conn).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

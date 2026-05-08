@@ -254,6 +254,18 @@ pub fn recover_interrupted_jobs(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+pub fn clear_index(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "BEGIN;
+         DELETE FROM activity_log;
+         DELETE FROM chunks_vec;
+         DELETE FROM files;
+         DELETE FROM index_jobs;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "db_test.rs"]
 mod tests;

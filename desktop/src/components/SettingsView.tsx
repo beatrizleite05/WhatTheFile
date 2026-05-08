@@ -63,7 +63,7 @@ export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', margin: 0 }}>
           Permanently remove all indexed data. Your source files will not be affected.
         </p>
-        <DeleteIndexButton />
+        <DeleteIndexButton onDeleted={settings.deleteIndex} />
       </div>
 
       <hr style={{ border: 'none', borderTop: '1px solid var(--divider)' }} />

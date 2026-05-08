@@ -22,6 +22,7 @@ const settings = {
   addRoot: vi.fn().mockResolvedValue(undefined),
   removeRoot: vi.fn().mockResolvedValue(undefined),
   reindex: vi.fn(),
+  deleteIndex: vi.fn().mockResolvedValue(undefined),
 };
 
 describe('ScopeEditor', () => {

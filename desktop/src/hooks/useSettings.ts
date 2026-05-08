@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { listRoots, removeRoot as apiRemoveRoot, type RootPayload } from '../api/settings';
+import { listRoots, removeRoot as apiRemoveRoot, deleteIndex as apiDeleteIndex, type RootPayload } from '../api/settings';
 import { addRoot as apiAddRoot, startIndexing } from '../api/indexing';
 import { errorMessage } from '../utils';
 
@@ -11,6 +11,7 @@ interface SettingsState {
   addRoot: (path: string) => Promise<void>;
   removeRoot: (id: number) => Promise<void>;
   reindex: (rootId: number) => void;
+  deleteIndex: () => Promise<void>;
 }
 
 export function useSettings(): SettingsState {
@@ -73,5 +74,11 @@ export function useSettings(): SettingsState {
     startIndexing(rootId).catch((e) => setError(errorMessage(e)));
   }, []);
 
-  return { roots, loading, error, addRoot, removeRoot, reindex };
+  const deleteIndex = useCallback(async () => {
+    setError(null);
+    await apiDeleteIndex();
+    setRoots((prev) => prev.map((r) => ({ ...r, lastIndexedAt: null })));
+  }, []);
+
+  return { roots, loading, error, addRoot, removeRoot, reindex, deleteIndex };
 }

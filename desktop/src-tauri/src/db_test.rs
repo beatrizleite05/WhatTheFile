@@ -62,6 +62,49 @@ fn test_startup_recovery_leaves_completed_jobs_alone() {
 }
 
 #[test]
+fn test_clear_index_removes_all_indexed_data_and_preserves_roots() {
+    let conn = setup();
+    let now = unix_now();
+
+    conn.execute(
+        "INSERT INTO roots (path, label, active, created_at) VALUES ('/test', 'Test', 1, ?1)",
+        rusqlite::params![now],
+    ).unwrap();
+    let root_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO files (root_id, rel_path, filename, media_type, size_bytes, mtime_ns, fingerprint, index_marker, indexed_at)
+         VALUES (?1, 'a.txt', 'a.txt', 'text/plain', 0, 0, 'fp', 1, ?2)",
+        rusqlite::params![root_id, now],
+    ).unwrap();
+    let file_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO index_jobs (root_id, status, index_marker, started_at, updated_at)
+         VALUES (?1, 'completed', 1, ?2, ?2)",
+        rusqlite::params![root_id, now],
+    ).unwrap();
+    let job_id = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO activity_log (event_type, file_id, job_id, created_at) VALUES ('indexed', ?1, ?2, ?3)",
+        rusqlite::params![file_id, job_id, now],
+    ).unwrap();
+
+    clear_index(&conn).unwrap();
+
+    let file_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).unwrap();
+    let job_count: i64 = conn.query_row("SELECT COUNT(*) FROM index_jobs", [], |r| r.get(0)).unwrap();
+    let log_count: i64 = conn.query_row("SELECT COUNT(*) FROM activity_log", [], |r| r.get(0)).unwrap();
+    let root_count: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |r| r.get(0)).unwrap();
+
+    assert_eq!(file_count, 0);
+    assert_eq!(job_count, 0);
+    assert_eq!(log_count, 0);
+    assert_eq!(root_count, 1, "roots must survive a clear_index");
+}
+
+#[test]
 fn test_migration_003_schema_version_and_no_embedding_column() {
     let conn = setup();
     let cols: Vec<String> = {

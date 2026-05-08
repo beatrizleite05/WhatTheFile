@@ -13,6 +13,7 @@ const mockSettings = {
   addRoot: vi.fn(),
   removeRoot: vi.fn(),
   reindex: vi.fn(),
+  deleteIndex: vi.fn().mockResolvedValue(undefined),
 };
 
 beforeEach(() => {
