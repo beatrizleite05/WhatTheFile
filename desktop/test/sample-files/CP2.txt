@@ -1,0 +1,235 @@
+
+
+Design and Implementation of the Java-- Compiler
+Part 2 - Intermediate Representation and
+## Transformations
+Compilers - L.EIC026 - 2025/2026
+## Tiago Carvalho, João Bispo, Alexandre Abreu
+Past contributions of
+Lázaro Costa, Pedro Pinto and Susana Lima
+University of Porto/FEUP
+Department of Informatics Engineering
+version 1.1, April 2026
+
+## Contents
+1  Code base for CP22
+1.1  Interfaces  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    2
+1.2  Interfaces  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    2
+## 2  Optimizations3
+2.1  Other optimizations  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    3
+3  Checklist for CP24
+3.1  Checklist for Core Features  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    4
+3.1.1  Declarations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    4
+3.1.2  Statements  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    4
+3.1.3  Entities and Operations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    4
+3.1.4  Calls . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    4
+3.1.5  Arrays . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    5
+3.1.6  Optimization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    5
+3.2  Checklist for Extensions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    5
+3.2.1  Declarations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    5
+3.2.2  Statements  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    6
+3.2.3  Entities and Operations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    6
+3.2.4  Calls . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    6
+3.2.5  Arrays . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    6
+3.2.6  Optimization . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .    7
+## Objectives
+This programming project aims at exposing the students to the various aspects of programming
+language design and implementation by building a working compiler for a simple, but realistic high-
+level programming language.  In this process, the students are expected to apply the knowledge
+acquired during the lectures and understand the various underlying algorithms and implementation
+trade-offs. The envisioned compiler will be able to handle a subset of the popular Java programming
+language and generate valid Java Virtual Machine (JVM) instructions in the jasmin format, which
+are then translated into Java bytecodes by the jasmin assembler.
+In the previous checkpoint you focused on the lexical, syntactic and semantic analysis stages. For
+Checkpoint 2, you will be working on the next phase: intermediate code generation in this case, using
+the OO-based Low-Level Intermediate Representation (OLLIR), and code transformation, both in
+the AST and OLLIR.
+## 1 Code base for CP2
+
+After the semantic analysis, if no errors are reported, the next stage to be executed is optimiza-
+tion. During this checkpoint, you will generate OLLIR code and apply transformations both in the
+Abstract-Syntax Tree (AST), before the intermediate code generation, and directly over OLLIR. The
+semantic analysis has provided you with a symbol table, and potentially an AST with additional
+annotated information (e.g., types). All that information will be used to convert the high-level AST
+you have used until now into a low-level intermediate representation named OLLIR (Object-Oriented
+Low-Level Intermediate Representation).
+To understand what is OLLIR, we have made available several documents [2, 1]. We will be
+providing additional information regarding OLLIR, that will be collected in the Compilers support
+document. The converted OLLIR tree will be used during the last phase of the project to generate
+Java bytecode in the Jasmin format.
+We provide a base implementation (i.e., JmmOptimizationImpl) and a generator (i.e., OllirGen-
+eratorVisitor) for the OLLIR generation, that you must complete.
+### 1.1  Interfaces
+For this stage, you will be working with the class JmmOptimizationImpl, an implementation of the
+JmmOptimization interface which defines three methods. For the OLLIR generation, you are only
+required to work on the toOllir method, which converts the AST to the OLLIR format. The method
+signature below illustrates this interface:
+*OllirResult toOllir(JmmSemanticsResult semanticsResult);*
+The output of this stage is an instance of the OllirResult class which is built using the previous
+JmmSemanticsResult, a string that will contain the generated OLLIR code, and possibly additional
+reports.
+### 1.2  Interfaces
+For this stage, you are required to implement the remaining methods of the JmmOptimization
+interface which are the transformation methods. The first works at the AST level and the second
+at the OLLIR level.
+The method signature below illustrates the first transformantion method:
+*JmmSemanticsResult transformAst(JmmSemanticsResult semanticsResult);*
+The method signature below illustrates the second transformation method:
+*OllirResult transformOllir( ollirResult);*
+
+## 2 Optimizations
+You must identify all the optimizations included in your compiler in the README.md file that
+will be part of the files of the project to be submitted once completed.
+### 2.1  Other optimizations
+With the option “-o” the compiler will include the following two optimizations, which we suggest
+implementing as transformations in the AST:
+- **Constant Propagation**: identify uses of the local variables that can be replaced by constants.
+This can reduce the number of local variables of the JVM used as variables with statically
+known constant values can be promoted to constants.
+For example, consider the following code snippet, where all variables are integers:
+```
+a = 10;
+b = a + 5;
+c = b + a ;
+```
+With constant propagation, the compiler would identify that the variable has a constant value
+of 10. The compiler would then replace all occurrences of a with 10, resulting in the following
+optimized code:
+```
+a = 10;
+b = 10 + 5;
+c = b + 10;
+```
+- **Constant Folding**: the compiler analyzes the code and identifies expressions that involve
+constant values, such as numeric literals or string literals.  The compiler then replaces the
+expressions with their resulting constant value, and the optimized code is generated.
+For example, consider the following code snippet:
+a = 10 + 5;
+With constant folding, the compiler would replace the expression 10 + 5 with its resulting
+constant value 15, resulting in the following optimized code:
+a = 15;
+Notice that applying both optimizations in sequence might enable furthers optimizations. We
+recommend implementing each transformation as a separate visitor, with a boolean field that in-
+dicates if after the visit any modification were applied.  This way, it is possible to execute the
+optimizations in a loop until it reaches a fixed point.
+
+## 3 Checklist for CP2
+This section lists a set of tasks that work as guidelines for the development. You should divide the
+work among the group members.
+Note: The following checklist applies to groups with 4 elements. If your group has fewer elements,
+you will not need to implement language features related to fields and arrays. This means that
+during the evaluation of your work, we will not apply tests that contain code with those elements.
+### 3.1  Checklist for Core Features
+##### 3.1.1  Declarations
+_OLLIR Generation_
+□ Class structure
+- Including the <init> constructor
+□ Method structure
+##### 3.1.2  Statements
+_OLLIR Generation_
+□ Conditional instructions
+□ While Loops
+□ Return statements
+##### 3.1.3  Entities and Operations
+_OLLIR Generation_
+□ Class fields
+□ Assignments
+□ Arithmetic and logical operators
+- With correct precedence
+##### 3.1.4  Calls
+_OLLIR Generation_
+□ Invocation of static methods
+□ Invocation of instance methods
+□ Invocation of new methods (without arguments)
+##### 3.1.5  Arrays
+OLLIR Generation
+□ Array instantiation
+□ Reading elements from arrays
+□ Writing elements to arrays
+###### 3.1.6  Optimization
+We provide a support document [3] to help you implement this optimization, it is referenced in the
+tasks that benefit from it.
+**Register Allocation**
+□ Get the value of the flag “–r=<n>” that controls the register allocation
+□ For n≥ 1, use at most <n> local variables when generating Jasmin instructions
+- If the value of <n> is not enough to store every variable of the method, the compiler
+will abort, report an error and indicate the minimum number of JVM local variables required
+□ For n= 0, use as few local variables as possible
+□ For n=−1, the compiler will use as many variables as originally present in the OLLIR
+representation
+- This is the default value
+□ Build the Control-Flow Graph for the program [3]
+□ Calculate the lifetime of variables using data-flow analysis [3]
+□ Build an interference graph based on the variables’ lifetimes [3]
+□ Apply a graph coloring algorithm for the register allocation proper [3]
+□ Report the mapping between the local variables of each method and the corresponding local
+variable of the JVM
+### 3.2  Checklist for Extensions
+##### 3.2.1  Declarations
+## Arbitrary Position
+OLLIR Generation
+□ Generation of class fields at the beginning of the class
+**Method Visibility**
+OLLIR Generation
+□ Correct generation of the visibility modifiers
+**## **Field Initializer**
+OLLIR Generation
+□ Generation of field initialization code inside class constructor
+##### 3.2.2  Statements
+**`if without else`**
+_OLLIR Generation_
+□ Correctly generate code that respects the original control flow
+**`for loop statement`**
+_OLLIR Generation_
+□ Either AST transformation of for loop to while loop OR direct OLLIR generation
+**`do-while loop statement`**
+_OLLIR Generation_
+□ Either AST transformation of do-while loop to while loop OR direct OLLIR generation
+##### 3.2.3  Entities and Operations
+**Additional Arithmetic operations**
+_OLLIR Generation_
+□ Additional arithmetic operators
+- With correct precedence
+**Additional Logical Operations**
+_OLLIR Generation_
+□ Additional logical operators
+- With correct precedence
+##### 3.2.4  Calls
+**Local Static Methods**
+_OLLIR Generation_
+□ Correct generation of static methods
+**New with Arguments**
+_OLLIR Generation_
+□ Invocation of new methods with arbitrary arguments
+**Implicit `this`**
+_OLLIR Generation_
+□ Invocation of instance methods of current object
+##### 3.2.5  Arrays
+**Array Initializer**
+_OLLIR Generation_
+□ Either AST transformation of array initializer to array initialization and writing OR direct
+_OLLIR generation_
+**Multidimensional Arrays**
+_OLLIR Generation_
+□ Multidimensional array instantiation
+□ Reading elements from multidimensional arrays
+□ Writing elements to multidimensional arrays
+##### 3.2.6  Optimization
+**Constant Propagation and Folding**
+□ Correctly apply constant propagation without changing program semantics
+□ Correctly apply constant folding without changing program semantics
+□ Apply several times both transformations until reaching a fixed point
+**Branch Elimination**
+□ Remove if-else branches when value of the condition is statically known
+**Dead Code Elimination**
+□ Detect portions of code that will not be executed and remove them
+
+## Bibliography
+[1] Ollir  tool,  v0.6,  l.eic,  feup,  april  2026.     https://docs.google.com/document/d/
+1X4150xtoMKKyj5t-yuCkH_bcYOYGrNWUNk7FWr9sh9I/edit?usp=sharing.
+[2] Oo-based low-level intermediate representation (ollir), v0.9, l.eic, feup, april 2026.  https:
+//docs.google.com/document/d/1FswA9DvMKScTSXozYEgQHcAY7BoMe82vW8gnxPIbmUo/edit?
+usp=sharing.
+[3] Register  allocation  for  the  compilers  project.   https://docs.google.com/document/d/
+1IkP4EVRQ85I-enBIUVZz_d4O8HLMb5Xg1T542OYMeeg/edit?usp=sharing.
+## 8
