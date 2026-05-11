@@ -105,6 +105,39 @@ fn test_clear_index_removes_all_indexed_data_and_preserves_roots() {
 }
 
 #[test]
+fn test_clear_root_index_removes_root_data_and_preserves_other_roots() {
+    let conn = setup();
+    let now = unix_now();
+
+    for path in ["/root/a", "/root/b"] {
+        conn.execute(
+            "INSERT INTO roots (path, label, active, created_at) VALUES (?1, ?1, 1, ?2)",
+            rusqlite::params![path, now],
+        ).unwrap();
+    }
+    let root_a: i64 = conn.query_row("SELECT id FROM roots WHERE path = '/root/a'", [], |r| r.get(0)).unwrap();
+    let root_b: i64 = conn.query_row("SELECT id FROM roots WHERE path = '/root/b'", [], |r| r.get(0)).unwrap();
+
+    for (root_id, rel) in [(root_a, "a.txt"), (root_b, "b.txt")] {
+        conn.execute(
+            "INSERT INTO files (root_id, rel_path, filename, media_type, size_bytes, mtime_ns, fingerprint, index_marker, indexed_at)
+             VALUES (?1, ?2, ?2, 'text/plain', 0, 0, ?2, 1, ?3)",
+            rusqlite::params![root_id, rel, now],
+        ).unwrap();
+    }
+
+    clear_root_index(&conn, root_a).unwrap();
+
+    let a_files: i64 = conn.query_row("SELECT COUNT(*) FROM files WHERE root_id = ?1", rusqlite::params![root_a], |r| r.get(0)).unwrap();
+    let b_files: i64 = conn.query_row("SELECT COUNT(*) FROM files WHERE root_id = ?1", rusqlite::params![root_b], |r| r.get(0)).unwrap();
+    let root_count: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |r| r.get(0)).unwrap();
+
+    assert_eq!(a_files, 0);
+    assert_eq!(b_files, 1, "other root's files must survive");
+    assert_eq!(root_count, 2, "roots must survive clear_root_index");
+}
+
+#[test]
 fn test_migration_003_schema_version_and_no_embedding_column() {
     let conn = setup();
     let cols: Vec<String> = {

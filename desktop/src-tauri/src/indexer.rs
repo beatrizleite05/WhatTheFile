@@ -111,6 +111,7 @@ pub fn run(
     let root = db::find_root_by_id(&conn, root_id)?
         .ok_or_else(|| AppError::Indexer(format!("root {root_id} not found")))?;
     let root_path = PathBuf::from(&root.path);
+    db::clear_root_index(&conn, root_id)?;
     let app = app.clone();
     run_scan(&conn, root_id, &root_path, ollama_url, &|event, payload| {
         let _ = app.emit(event, payload);
@@ -182,6 +183,7 @@ pub fn run_scan(
         "filesDeleted": counts.files_deleted,
         "errorCount": counts.error_count,
     }));
+    emit("index://changed", &serde_json::Value::Null);
 
     // Release VRAM immediately after indexing completes.
     match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {

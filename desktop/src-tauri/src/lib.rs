@@ -107,6 +107,7 @@ async fn remove_root(
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        db::clear_root_index(&conn, id).map_err(|e| e.to_string())?;
         conn.execute("UPDATE roots SET active = 0 WHERE id = ?1", [id])
             .map_err(|e| e.to_string())?;
         Ok::<(), String>(())

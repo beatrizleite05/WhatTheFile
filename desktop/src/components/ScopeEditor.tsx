@@ -1,4 +1,4 @@
-import { FolderOpen, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { FolderOpen, Trash2, RefreshCw, Plus, LoaderCircle } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { formatRelativeTime } from '../utils';
 import type { useSettings } from '../hooks/useSettings';
@@ -10,7 +10,7 @@ interface ScopeEditorProps {
 }
 
 export function ScopeEditor({ settings }: ScopeEditorProps) {
-  const { roots, loading, addRoot, removeRoot, reindex } = settings;
+  const { roots, loading, error, addRoot, removeRoot, reindex, indexingRootIds } = settings;
 
   async function handleAddFolder() {
     const picked = await open({ directory: true, multiple: false });
@@ -61,6 +61,12 @@ export function ScopeEditor({ settings }: ScopeEditorProps) {
         </p>
       )}
 
+      {error && (
+        <p style={{ color: 'var(--status-error-text)', fontSize: 'var(--font-size-xs)', margin: 0 }}>
+          {error}
+        </p>
+      )}
+
       {roots.map((root) => (
         <div
           key={root.id}
@@ -86,9 +92,12 @@ export function ScopeEditor({ settings }: ScopeEditorProps) {
           <button
             aria-label={`Reindex ${root.label}`}
             onClick={() => reindex(root.id)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex' }}
+            disabled={indexingRootIds.has(root.id)}
+            style={{ background: 'none', border: 'none', cursor: indexingRootIds.has(root.id) ? 'default' : 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', opacity: indexingRootIds.has(root.id) ? 0.4 : 1 }}
           >
-            <RefreshCw size={13} />
+            {indexingRootIds.has(root.id)
+              ? <LoaderCircle size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              : <RefreshCw size={13} />}
           </button>
           <button
             aria-label={`Remove ${root.label}`}

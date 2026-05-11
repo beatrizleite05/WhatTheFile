@@ -8,6 +8,7 @@ interface SettingsState {
   roots: RootPayload[];
   loading: boolean;
   error: string | null;
+  indexingRootIds: Set<number>;
   addRoot: (path: string) => Promise<void>;
   removeRoot: (id: number) => Promise<void>;
   reindex: (rootId: number) => void;
@@ -18,6 +19,7 @@ export function useSettings(): SettingsState {
   const [roots, setRoots] = useState<RootPayload[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [indexingRootIds, setIndexingRootIds] = useState<Set<number>>(new Set());
 
   const loadRoots = useCallback(async () => {
     try {
@@ -71,7 +73,11 @@ export function useSettings(): SettingsState {
   }, []);
 
   const reindex = useCallback((rootId: number) => {
-    startIndexing(rootId).catch((e) => setError(errorMessage(e)));
+    setIndexingRootIds((prev) => new Set(prev).add(rootId));
+    setError(null);
+    startIndexing(rootId)
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setIndexingRootIds((prev) => { const next = new Set(prev); next.delete(rootId); return next; }));
   }, []);
 
   const deleteIndex = useCallback(async () => {
@@ -80,5 +86,5 @@ export function useSettings(): SettingsState {
     setRoots((prev) => prev.map((r) => ({ ...r, lastIndexedAt: null })));
   }, []);
 
-  return { roots, loading, error, addRoot, removeRoot, reindex, deleteIndex };
+  return { roots, loading, error, indexingRootIds, addRoot, removeRoot, reindex, deleteIndex };
 }

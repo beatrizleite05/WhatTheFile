@@ -19,6 +19,7 @@ const settings = {
   ],
   loading: false,
   error: null,
+  indexingRootIds: new Set<number>(),
   addRoot: vi.fn().mockResolvedValue(undefined),
   removeRoot: vi.fn().mockResolvedValue(undefined),
   reindex: vi.fn(),
