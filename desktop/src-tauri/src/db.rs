@@ -268,7 +268,10 @@ pub fn clear_index(conn: &Connection) -> Result<(), AppError> {
 
 pub fn clear_root_index(conn: &Connection, root_id: i64) -> Result<(), AppError> {
     conn.execute(
-        "DELETE FROM activity_log WHERE root_id = ?1",
+        "DELETE FROM activity_log
+         WHERE root_id = ?1
+            OR job_id  IN (SELECT id FROM index_jobs WHERE root_id = ?1)
+            OR file_id IN (SELECT id FROM files      WHERE root_id = ?1)",
         params![root_id],
     )?;
     conn.execute(
