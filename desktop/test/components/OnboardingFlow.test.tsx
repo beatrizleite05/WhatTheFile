@@ -10,6 +10,7 @@ const mockSettings = {
   roots: [],
   loading: false,
   error: null,
+  indexingRootIds: new Set<number>(),
   addRoot: vi.fn(),
   removeRoot: vi.fn(),
   reindex: vi.fn(),

@@ -35,6 +35,9 @@ pub fn add_root(conn: &Connection, path: &str) -> Result<RootPayload, AppError> 
     let path_str = canonical.to_string_lossy().to_string();
 
     if let Some(existing) = db::find_root_by_path(conn, &path_str)? {
+        if !existing.active {
+            conn.execute("UPDATE roots SET active = 1 WHERE id = ?1", [existing.id])?;
+        }
         return Ok(existing.into());
     }
     Ok(db::insert_root(conn, &path_str)?.into())
