@@ -10,6 +10,7 @@ pub mod platform;
 pub mod search_engine;
 
 use std::path::PathBuf;
+use tauri::Emitter;
 use crate::config::RootPayload;
 
 pub struct AppState {
@@ -101,6 +102,7 @@ async fn list_roots(
 
 #[tauri::command]
 async fn remove_root(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<(), String> {
@@ -113,11 +115,14 @@ async fn remove_root(
         Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let _ = app.emit("index://changed", ());
+    Ok(())
 }
 
 #[tauri::command]
 async fn delete_index(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let db_path = state.db_path.clone();
@@ -126,7 +131,9 @@ async fn delete_index(
         db::clear_index(&conn).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let _ = app.emit("index://changed", ());
+    Ok(())
 }
 
 #[tauri::command]
