@@ -2,15 +2,24 @@ import { FolderOpen, Trash2, RefreshCw, Plus, LoaderCircle } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog';
 import { formatRelativeTime } from '../utils';
 import type { useSettings } from '../hooks/useSettings';
+import type { IndexingJob } from '../hooks/useIndexing';
 
 type SettingsHook = ReturnType<typeof useSettings>;
 
 interface ScopeEditorProps {
   settings: SettingsHook;
+  jobs: IndexingJob[];
 }
 
-export function ScopeEditor({ settings }: ScopeEditorProps) {
-  const { roots, loading, error, addRoot, removeRoot, reindex, indexingRootIds } = settings;
+const PHASE_LABELS: Record<IndexingJob['phase'], string> = {
+  discovering: 'Discovering…',
+  fingerprinting: 'Fingerprinting…',
+  extracting: 'Extracting…',
+  completed: 'Complete',
+};
+
+export function ScopeEditor({ settings, jobs }: ScopeEditorProps) {
+  const { roots, loading, error, addRoot, removeRoot, reindex } = settings;
 
   async function handleAddFolder() {
     const picked = await open({ directory: true, multiple: false });
@@ -85,17 +94,29 @@ export function ScopeEditor({ settings }: ScopeEditorProps) {
             <div style={{ color: 'var(--text-primary)', fontSize: 'var(--font-size-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {root.label}
             </div>
-            <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-xs)', fontFamily: 'var(--font-mono)' }}>
-              {root.lastIndexedAt ? `Indexed ${formatRelativeTime(root.lastIndexedAt)}` : 'Not yet indexed'}
-            </div>
+            {(() => {
+              const activeJob = jobs.find((j) => j.rootId === root.id && !j.isComplete);
+              if (activeJob) {
+                return (
+                  <div style={{ color: 'var(--accent)', fontSize: 'var(--font-size-xs)', fontFamily: 'var(--font-mono)' }}>
+                    {PHASE_LABELS[activeJob.phase]}{activeJob.filesTotal > 0 ? ` ${activeJob.filesDone}/${activeJob.filesTotal}` : ''}
+                  </div>
+                );
+              }
+              return (
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-xs)', fontFamily: 'var(--font-mono)' }}>
+                  {root.lastIndexedAt ? `Indexed ${formatRelativeTime(root.lastIndexedAt)}` : 'Not yet indexed'}
+                </div>
+              );
+            })()}
           </div>
           <button
             aria-label={`Reindex ${root.label}`}
             onClick={() => reindex(root.id)}
-            disabled={indexingRootIds.has(root.id)}
-            style={{ background: 'none', border: 'none', cursor: indexingRootIds.has(root.id) ? 'default' : 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', opacity: indexingRootIds.has(root.id) ? 0.4 : 1 }}
+            disabled={jobs.some((j) => j.rootId === root.id && !j.isComplete)}
+            style={{ background: 'none', border: 'none', cursor: jobs.some((j) => j.rootId === root.id && !j.isComplete) ? 'default' : 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', opacity: jobs.some((j) => j.rootId === root.id && !j.isComplete) ? 0.4 : 1 }}
           >
-            {indexingRootIds.has(root.id)
+            {jobs.some((j) => j.rootId === root.id && !j.isComplete)
               ? <LoaderCircle size={13} style={{ animation: 'spin 1s linear infinite' }} />
               : <RefreshCw size={13} />}
           </button>

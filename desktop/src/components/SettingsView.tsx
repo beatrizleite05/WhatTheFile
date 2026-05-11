@@ -48,7 +48,7 @@ export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
         <h1 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 700, margin: 0 }}>Settings</h1>
       </div>
 
-      <ScopeEditor settings={settings} />
+      <ScopeEditor settings={settings} jobs={indexing.jobs} />
 
       <hr style={{ border: 'none', borderTop: '1px solid var(--divider)' }} />
 
