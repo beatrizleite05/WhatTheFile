@@ -10,6 +10,7 @@ interface ResultGridProps {
   query: string;
   hasMore: boolean;
   loading: boolean;
+  indexingActive?: boolean;
   onOpen: (result: FileResult) => void;
   onSelect?: (result: FileResult) => void;
   onApplySuggestion?: (query: string) => void;
@@ -21,7 +22,7 @@ export interface ResultGridHandle {
 }
 
 export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
-  function ResultGrid({ results, query, hasMore, loading, onOpen, onSelect, onApplySuggestion, onLoadMore }, ref) {
+  function ResultGrid({ results, query, hasMore, loading, indexingActive = false, onOpen, onSelect, onApplySuggestion, onLoadMore }, ref) {
     const [selectedIndex, setSelectedIndex] = useState(-1);
     const [suggestions, setSuggestions] = useState<FileResult[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -103,12 +104,18 @@ export const ResultGrid = forwardRef<ResultGridHandle, ResultGridProps>(
           }}
         >
           <span>No results for "{query}"</span>
-          <EmptyStateSuggestions
-            suggestions={suggestions}
-            onApplySuggestion={(suggestionQuery) => {
-              onApplySuggestion?.(suggestionQuery);
-            }}
-          />
+          {indexingActive ? (
+            <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
+              Indexing is in progress — results will appear as files are indexed.
+            </span>
+          ) : (
+            <EmptyStateSuggestions
+              suggestions={suggestions}
+              onApplySuggestion={(suggestionQuery) => {
+                onApplySuggestion?.(suggestionQuery);
+              }}
+            />
+          )}
         </div>
       );
     }

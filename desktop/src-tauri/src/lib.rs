@@ -13,6 +13,20 @@ use std::path::PathBuf;
 use tauri::Emitter;
 use crate::config::RootPayload;
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletedJobPayload {
+    pub job_id: i64,
+    pub root_id: i64,
+    pub files_total: i64,
+    pub files_added: i64,
+    pub files_updated: i64,
+    pub files_moved: i64,
+    pub files_deleted: i64,
+    pub error_count: i64,
+    pub completed_at: i64,
+}
+
 pub struct AppState {
     pub db_path: PathBuf,
     pub ollama_url: String,
@@ -68,6 +82,7 @@ pub fn run() {
             open_file,
             get_runtime_status,
             parse_query,
+            get_activity_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -194,6 +209,32 @@ async fn parse_query(
     let ollama_url = state.ollama_url.clone();
     tauri::async_runtime::spawn_blocking(move || {
         llm::query_parser::parse_query(&input, &ollama_url).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_activity_log(
+    state: tauri::State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<CompletedJobPayload>, String> {
+    let db_path = state.db_path.clone();
+    let limit = limit.unwrap_or(50);
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_and_migrate(&db_path).map_err(|e| e.to_string())?;
+        let jobs = db::list_completed_jobs(&conn, limit).map_err(|e| e.to_string())?;
+        Ok(jobs.into_iter().map(|j| CompletedJobPayload {
+            job_id: j.job_id,
+            root_id: j.root_id,
+            files_total: j.files_total,
+            files_added: j.files_added,
+            files_updated: j.files_updated,
+            files_moved: j.files_moved,
+            files_deleted: j.files_deleted,
+            error_count: j.error_count,
+            completed_at: j.completed_at,
+        }).collect())
     })
     .await
     .map_err(|e| e.to_string())?

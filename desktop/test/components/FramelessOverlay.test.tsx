@@ -5,13 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { FramelessOverlay } from '../../src/components/FramelessOverlay';
 import type { UseSearchReturn } from '../../src/hooks/useSearch';
 import type { UseOllamaStatusReturn } from '../../src/hooks/useOllamaStatus';
-import type { IndexingJob } from '../../src/hooks/useIndexing';
+import type { IndexingJob, UseIndexingReturn } from '../../src/hooks/useIndexing';
 import type { FileResult } from '../../src/core/types';
-
-interface IndexingState {
-  jobs: IndexingJob[];
-  activeJob: IndexingJob | null;
-}
 
 const makeSearch = (overrides: Partial<UseSearchReturn> = {}): UseSearchReturn => ({
   query: '', setQuery: vi.fn(), mode: 'hybrid', setMode: vi.fn(),
@@ -20,8 +15,8 @@ const makeSearch = (overrides: Partial<UseSearchReturn> = {}): UseSearchReturn =
   ...overrides,
 });
 
-const makeIndexing = (overrides: Partial<IndexingState> = {}): IndexingState => ({
-  jobs: [], activeJob: null, ...overrides,
+const makeIndexing = (overrides: Partial<UseIndexingReturn> = {}): UseIndexingReturn => ({
+  jobs: [], activeJob: null, startIndexing: vi.fn(), ...overrides,
 });
 
 const makeOllama = (overrides: Partial<UseOllamaStatusReturn> = {}): UseOllamaStatusReturn => ({
@@ -92,10 +87,20 @@ describe('FramelessOverlay', () => {
     const activeJob: IndexingJob = {
       jobId: 1, rootId: 1, phase: 'extracting',
       filesTotal: 100, filesDone: 50, filesAdded: 20, filesUpdated: 0,
-      filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 50, isComplete: false,
+      filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 50, isComplete: false, completedAt: null,
     };
     render(<FramelessOverlay search={makeSearch()} indexing={makeIndexing({ activeJob })} ollamaStatus={makeOllama()} onOpenSettings={noop} />);
-    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getAllByRole('progressbar').length).toBeGreaterThan(0);
+  });
+
+  it('shows IndexingHero in results pane when query is empty and indexing is active', () => {
+    const activeJob: IndexingJob = {
+      jobId: 1, rootId: 1, phase: 'discovering',
+      filesTotal: 0, filesDone: 0, filesAdded: 0, filesUpdated: 0,
+      filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 0, isComplete: false, completedAt: null,
+    };
+    render(<FramelessOverlay search={makeSearch({ query: '' })} indexing={makeIndexing({ activeJob })} ollamaStatus={makeOllama()} onOpenSettings={noop} />);
+    expect(screen.getByTestId('indexing-hero')).toBeInTheDocument();
   });
 
   it('hides window when Escape pressed with empty query', async () => {

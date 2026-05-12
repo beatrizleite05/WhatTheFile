@@ -8,36 +8,37 @@ const mockInvoke = vi.mocked(invoke);
 const mockListen = vi.mocked(listen);
 
 const mockRoot = { id: 1, path: '/home/user/docs', label: 'docs', active: true, createdAt: 1000, lastIndexedAt: null };
+const mockStartIndexing = vi.fn().mockResolvedValue(undefined);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockListen.mockResolvedValue(() => {});
+  mockStartIndexing.mockResolvedValue(undefined);
 });
 
 describe('useSettings', () => {
   it('starts with empty roots and loading true', () => {
     mockInvoke.mockResolvedValue([]);
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     expect(result.current.roots).toEqual([]);
     expect(result.current.loading).toBe(true);
   });
 
   it('populates roots after mount', async () => {
     mockInvoke.mockResolvedValue([mockRoot]);
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
     expect(result.current.roots).toEqual([mockRoot]);
     expect(result.current.loading).toBe(false);
   });
 
-  it('addRoot calls add_root then start_indexing and appends root', async () => {
+  it('addRoot calls add_root then startIndexing and appends root', async () => {
     const newRoot = { id: 2, path: '/home/user/pictures', label: 'pictures', active: true, createdAt: 2000, lastIndexedAt: null };
     mockInvoke
       .mockResolvedValueOnce([mockRoot])   // list_roots on mount
-      .mockResolvedValueOnce(newRoot)      // add_root
-      .mockResolvedValueOnce(42);          // start_indexing
+      .mockResolvedValueOnce(newRoot);     // add_root
 
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
 
     await act(async () => {
@@ -45,7 +46,7 @@ describe('useSettings', () => {
     });
 
     expect(mockInvoke).toHaveBeenCalledWith('add_root', { path: '/home/user/pictures' });
-    expect(mockInvoke).toHaveBeenCalledWith('start_indexing', { rootId: 2 });
+    expect(mockStartIndexing).toHaveBeenCalledWith(2);
     expect(result.current.roots).toContainEqual(newRoot);
   });
 
@@ -54,7 +55,7 @@ describe('useSettings', () => {
       .mockResolvedValueOnce([mockRoot])  // list_roots on mount
       .mockResolvedValueOnce(undefined);  // remove_root
 
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
 
     await act(async () => {
@@ -65,19 +66,17 @@ describe('useSettings', () => {
     expect(result.current.roots).toEqual([]);
   });
 
-  it('reindex calls start_indexing with rootId', async () => {
-    mockInvoke
-      .mockResolvedValueOnce([mockRoot])
-      .mockResolvedValueOnce(99);
+  it('reindex calls startIndexing with rootId', async () => {
+    mockInvoke.mockResolvedValueOnce([mockRoot]);
 
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
 
     await act(async () => {
       result.current.reindex(1);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith('start_indexing', { rootId: 1 });
+    expect(mockStartIndexing).toHaveBeenCalledWith(1);
   });
 
   it('surfaces error when addRoot API fails', async () => {
@@ -85,7 +84,7 @@ describe('useSettings', () => {
       .mockResolvedValueOnce([])
       .mockRejectedValueOnce('path does not exist');
 
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
 
     await act(async () => {
@@ -106,7 +105,7 @@ describe('useSettings', () => {
       .mockResolvedValueOnce([mockRoot])    // initial list_roots
       .mockResolvedValueOnce([updatedRoot]); // refresh after event
 
-    const { result } = renderHook(() => useSettings());
+    const { result } = renderHook(() => useSettings(mockStartIndexing));
     await act(async () => {});
 
     await act(async () => {

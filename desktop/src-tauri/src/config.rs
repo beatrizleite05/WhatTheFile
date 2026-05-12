@@ -37,6 +37,9 @@ pub fn add_root(conn: &Connection, path: &str) -> Result<RootPayload, AppError> 
     if let Some(existing) = db::find_root_by_path(conn, &path_str)? {
         if !existing.active {
             conn.execute("UPDATE roots SET active = 1 WHERE id = ?1", [existing.id])?;
+            let reactivated = db::find_root_by_id(conn, existing.id)?
+                .ok_or_else(|| AppError::Config("root vanished after reactivation".into()))?;
+            return Ok(reactivated.into());
         }
         return Ok(existing.into());
     }
@@ -105,6 +108,23 @@ mod tests {
             "SELECT COUNT(*) FROM roots", [], |r| r.get(0)
         ).unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_add_root_reactivated_root_returns_active_payload() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let conn = db::open_and_migrate(&db_path).unwrap();
+
+        let root_dir = dir.path().join("docs");
+        std::fs::create_dir(&root_dir).unwrap();
+        let first = add_root(&conn, root_dir.to_str().unwrap()).unwrap();
+        // Simulate remove_root deactivating it.
+        conn.execute("UPDATE roots SET active = 0 WHERE id = ?1", [first.id]).unwrap();
+        // Re-adding must return active: true with the correct id.
+        let reactivated = add_root(&conn, root_dir.to_str().unwrap()).unwrap();
+        assert_eq!(reactivated.id, first.id);
+        assert!(reactivated.active, "reactivated root must have active: true");
     }
 
     #[test]

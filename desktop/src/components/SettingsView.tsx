@@ -11,8 +11,8 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
-  const settings = useSettings();
   const indexing = useIndexing();
+  const settings = useSettings(indexing.startIndexing);
 
   return (
     <div

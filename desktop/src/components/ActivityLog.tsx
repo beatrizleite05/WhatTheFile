@@ -6,7 +6,9 @@ interface ActivityLogProps {
 }
 
 export function ActivityLog({ jobs }: ActivityLogProps) {
-  const completed = jobs.filter((j) => j.isComplete);
+  const completed = jobs
+    .filter((j) => j.isComplete && j.completedAt !== null)
+    .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -36,7 +38,7 @@ export function ActivityLog({ jobs }: ActivityLogProps) {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
             <span>Root #{job.rootId}</span>
             <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
-              {formatRelativeTime(Date.now() / 1000)}
+              {job.completedAt !== null ? formatRelativeTime(job.completedAt) : '—'}
             </span>
           </div>
           <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
