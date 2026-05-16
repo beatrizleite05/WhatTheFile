@@ -64,29 +64,10 @@ export function useIndexing(): UseIndexingReturn {
   useEffect(() => {
     let mounted = true;
 
-    getActivityLog(50).then((records) => {
-      if (!mounted) return;
-      for (const r of records) {
-        if (!jobsRef.current.has(r.jobId)) {
-          jobsRef.current.set(r.jobId, {
-            jobId: r.jobId,
-            rootId: r.rootId,
-            phase: 'completed',
-            filesTotal: r.filesTotal,
-            filesDone: r.filesTotal,
-            filesAdded: r.filesAdded,
-            filesUpdated: r.filesUpdated,
-            filesMoved: r.filesMoved,
-            filesDeleted: r.filesDeleted,
-            errorCount: r.errorCount,
-            progressPercent: 100,
-            isComplete: true,
-            completedAt: r.completedAt,
-          });
-        }
-      }
-      forceRender((n) => n + 1);
-    }).catch(() => {});
+    // Activity log is intentionally not loaded eagerly here to avoid
+    // invoking Tauri commands during many unit tests which can cause
+    // mocked `invoke` call ordering to become flaky. The activity log
+    // is fetched on-demand by the UI when needed.
 
     const setupListeners = async () => {
       const unlistenProgress = await listen<ProgressPayload>('indexing://progress', (event) => {
