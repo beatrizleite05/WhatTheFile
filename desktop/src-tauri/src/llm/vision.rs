@@ -1,3 +1,4 @@
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use crate::errors::AppError;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 
@@ -13,24 +14,24 @@ const VISION_TIMEOUT_SECS: u64 = 180;
 /// is not available (Ollama returns a 404-style "model not found" error).
 ///
 /// `ollama_base_url` — e.g. `"http://localhost:11434"`.
-pub fn describe_image(image_path: &str, ollama_base_url: &str) -> Result<String, AppError> {
+pub fn describe_image(image_path: &str, ollama_base_url: &str, cancel: &Arc<AtomicBool>) -> Result<String, AppError> {
     let bytes = std::fs::read(image_path)
         .map_err(|e| AppError::Extractor(format!("cannot read image {image_path}: {e}")))?;
     let encoded = B64.encode(&bytes);
 
     // Try primary, fall back on model-not-found errors.
-    match call_ollama_bounded(ollama_base_url, PRIMARY_MODEL, &encoded) {
+    match call_ollama_bounded(ollama_base_url, PRIMARY_MODEL, &encoded, cancel) {
         Ok(desc) => Ok(desc),
         Err(AppError::Llm(ref msg)) if msg.contains("model") && msg.contains("not found") => {
-            call_ollama_bounded(ollama_base_url, FALLBACK_MODEL, &encoded)
+            call_ollama_bounded(ollama_base_url, FALLBACK_MODEL, &encoded, cancel)
         }
         Err(e) => Err(e),
     }
 }
 
 /// Calls Ollama on a background thread and waits at most `VISION_TIMEOUT_SECS`.
-/// This enforces a hard wall-clock timeout regardless of HTTP chunked keepalives.
-fn call_ollama_bounded(base_url: &str, model: &str, image_b64: &str) -> Result<String, AppError> {
+/// Polls the cancel flag every second so cancellation is responsive.
+fn call_ollama_bounded(base_url: &str, model: &str, image_b64: &str, cancel: &Arc<AtomicBool>) -> Result<String, AppError> {
     use std::sync::mpsc;
 
     let (tx, rx) = mpsc::channel();
@@ -43,8 +44,24 @@ fn call_ollama_bounded(base_url: &str, model: &str, image_b64: &str) -> Result<S
         let _ = tx.send(call_ollama(&base_url, &model, &image_b64));
     });
 
-    rx.recv_timeout(std::time::Duration::from_secs(VISION_TIMEOUT_SECS))
-        .map_err(|_| AppError::Llm(format!("ollama timed out after {VISION_TIMEOUT_SECS}s ({model_name})")))?
+    let mut elapsed = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                elapsed += 1;
+                if elapsed >= VISION_TIMEOUT_SECS {
+                    return Err(AppError::Llm(format!("ollama timed out after {VISION_TIMEOUT_SECS}s ({model_name})")));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AppError::Llm(format!("ollama thread disconnected ({model_name})")));
+            }
+        }
+    }
 }
 
 fn call_ollama(base_url: &str, model: &str, image_b64: &str) -> Result<String, AppError> {

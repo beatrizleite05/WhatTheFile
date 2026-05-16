@@ -9,6 +9,10 @@ export async function startIndexing(rootId: number): Promise<number> {
   return invoke<number>('start_indexing', { rootId });
 }
 
+export async function cancelIndexing(): Promise<void> {
+  return invoke<void>('cancel_indexing');
+}
+
 export interface CompletedJobRecord {
   jobId: number;
   rootId: number;

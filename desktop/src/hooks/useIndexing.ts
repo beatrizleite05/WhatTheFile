@@ -114,6 +114,17 @@ export function useIndexing(): UseIndexingReturn {
         forceRender((n) => n + 1);
       });
 
+      const unlistenCancelled = await listen<{ jobId: number; rootId: number }>('indexing://cancelled', (event) => {
+        if (!mounted) return;
+        const { jobId } = event.payload;
+        jobsRef.current.delete(PENDING_JOB_ID);
+        const existing = jobsRef.current.get(jobId);
+        if (existing) {
+          jobsRef.current.set(jobId, { ...existing, isComplete: true, completedAt: Math.floor(Date.now() / 1000) });
+        }
+        forceRender((n) => n + 1);
+      });
+
       const unlistenCompleted = await listen<CompletedPayload>('indexing://completed', (event) => {
         if (!mounted) return;
         const p = event.payload;
@@ -138,10 +149,11 @@ export function useIndexing(): UseIndexingReturn {
       });
 
       if (mounted) {
-        unlistenRefs.current = [unlistenProgress, unlistenCompleted];
+        unlistenRefs.current = [unlistenProgress, unlistenCompleted, unlistenCancelled];
       } else {
         unlistenProgress();
         unlistenCompleted();
+        unlistenCancelled();
       }
     };
 
@@ -176,8 +188,14 @@ export function useIndexing(): UseIndexingReturn {
     try {
       await apiStartIndexing(rootId);
     } finally {
-      // Clean up the pending sentinel if Rust never replaced it (e.g. error).
+      // Remove the sentinel and mark any still-active job for this root as
+      // complete so the hero dismisses on cancellation or error.
       jobsRef.current.delete(PENDING_JOB_ID);
+      for (const [id, job] of jobsRef.current) {
+        if (job.rootId === rootId && !job.isComplete) {
+          jobsRef.current.set(id, { ...job, isComplete: true, completedAt: Math.floor(Date.now() / 1000) });
+        }
+      }
       forceRender((n) => n + 1);
     }
   }, []);

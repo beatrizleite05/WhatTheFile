@@ -150,6 +150,7 @@ fn run() -> Result<(), String> {
             root.id,
             &corpus_abs,
             &args.ollama_url,
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             &|_event, _payload| { /* no-op */ },
         ).map_err(|e| format!("indexer::run_scan: {e}"))?;
         eprintln!("eval: indexing complete");

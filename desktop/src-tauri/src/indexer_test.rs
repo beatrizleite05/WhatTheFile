@@ -1,6 +1,7 @@
 use super::*;
 use rusqlite::{Connection, params};
 use std::path::Path;
+use std::sync::{Arc, atomic::AtomicBool};
 use tempfile::tempdir;
 
 fn setup_db() -> (tempfile::TempDir, Connection) {
@@ -15,6 +16,7 @@ fn write_file(dir: &Path, name: &str, content: &str) {
 }
 
 fn no_emit(_: &str, _: &serde_json::Value) {}
+fn no_cancel() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
 
 #[test]
 fn test_first_run_indexes_all_txt_files() {
@@ -25,7 +27,7 @@ fn test_first_run_indexes_all_txt_files() {
     write_file(&root_dir, "b.txt", "world");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     assert!(job_id > 0);
     let count: i64 = conn.query_row(
@@ -53,7 +55,7 @@ fn test_first_run_files_added_count_matches() {
     write_file(&root_dir, "c.csv", "c");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let added: i64 = conn.query_row(
         "SELECT files_added FROM index_jobs WHERE id = ?1",
@@ -71,9 +73,9 @@ fn test_second_run_with_no_changes_skips_all_files() {
     write_file(&root_dir, "a.txt", "hello");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
-    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
     let (added, updated): (i64, i64) = conn.query_row(
         "SELECT files_added, files_updated FROM index_jobs WHERE id = ?1",
         params![job_id2],
@@ -91,12 +93,12 @@ fn test_changed_file_is_reindexed() {
     write_file(&root_dir, "a.txt", "original content");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(10));
     write_file(&root_dir, "a.txt", "changed content");
 
-    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
     let updated: i64 = conn.query_row(
         "SELECT files_updated FROM index_jobs WHERE id = ?1",
         params![job_id2],
@@ -114,11 +116,11 @@ fn test_deleted_file_is_soft_deleted() {
     write_file(&root_dir, "b.txt", "world");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     std::fs::remove_file(root_dir.join("b.txt")).unwrap();
 
-    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
     let deleted: i64 = conn.query_row(
         "SELECT files_deleted FROM index_jobs WHERE id = ?1",
         params![job_id2],
@@ -142,11 +144,11 @@ fn test_renamed_file_detected_as_move() {
     write_file(&root_dir, "old.txt", "stable content");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     std::fs::rename(root_dir.join("old.txt"), root_dir.join("new.txt")).unwrap();
 
-    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    let job_id2 = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
     let (moved, added, deleted): (i64, i64, i64) = conn.query_row(
         "SELECT files_moved, files_added, files_deleted FROM index_jobs WHERE id = ?1",
         params![job_id2],
@@ -166,7 +168,7 @@ fn test_unknown_extension_is_skipped() {
     write_file(&root_dir, "a.bin", "binary");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -185,7 +187,7 @@ fn test_hidden_file_is_skipped() {
     write_file(&root_dir, ".hidden.txt", "secret");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -208,7 +210,7 @@ fn test_interrupted_job_marked_on_next_run() {
         params![root.id, now],
     ).unwrap();
 
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let interrupted: i64 = conn.query_row(
         "SELECT COUNT(*) FROM index_jobs WHERE status = 'interrupted'",
@@ -226,7 +228,7 @@ fn test_txt_files_have_extracted_text_after_scan() {
     write_file(&root_dir, "notes.txt", "the quick brown fox jumps over the lazy dog");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let (text, model_ver): (String, String) = conn.query_row(
         "SELECT extracted_text, model_version FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -245,7 +247,7 @@ fn test_chunks_populated_for_txt_file() {
     write_file(&root_dir, "notes.txt", "word ".repeat(10).trim());
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let file_id: i64 = conn.query_row(
         "SELECT id FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -268,14 +270,14 @@ fn test_second_scan_skips_extraction_for_unchanged_file() {
     write_file(&root_dir, "a.txt", "stable content");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     conn.execute(
         "UPDATE files SET extracted_text = 'sentinel' WHERE root_id = ?1",
         params![root.id],
     ).unwrap();
 
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let text: String = conn.query_row(
         "SELECT extracted_text FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -295,7 +297,7 @@ fn test_large_batch_completes_without_panic() {
     }
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -318,7 +320,7 @@ fn test_junk_directories_are_not_indexed() {
     write_file(&root_dir.join("src"), "main.txt", "application source");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM files WHERE root_id = ?1 AND deleted_at IS NULL",
@@ -344,7 +346,7 @@ fn test_file_in_code_repo_gets_reduced_confidence() {
     write_file(&root_dir, "standalone.txt", "standalone document");
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
-    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_emit).unwrap();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
 
     let rows: Vec<(String, f32)> = {
         let mut stmt = conn.prepare(

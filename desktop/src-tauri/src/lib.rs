@@ -10,6 +10,7 @@ pub mod platform;
 pub mod search_engine;
 
 use std::path::PathBuf;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tauri::Emitter;
 use crate::config::RootPayload;
 
@@ -30,6 +31,7 @@ pub struct CompletedJobPayload {
 pub struct AppState {
     pub db_path: PathBuf,
     pub ollama_url: String,
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 pub fn run() {
@@ -65,6 +67,7 @@ pub fn run() {
             app.manage(AppState {
                 db_path,
                 ollama_url: ollama_url.clone(),
+                cancel_flag: Arc::new(AtomicBool::new(false)),
             });
             std::thread::spawn(move || {
                 let _ = llm::runtime::release_stale_models(&ollama_url);
@@ -83,6 +86,7 @@ pub fn run() {
             get_runtime_status,
             parse_query,
             get_activity_log,
+            cancel_indexing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -159,11 +163,21 @@ async fn start_indexing(
 ) -> Result<i64, String> {
     let db_path = state.db_path.clone();
     let ollama_url = state.ollama_url.clone();
+    let cancel_flag = state.cancel_flag.clone();
+    cancel_flag.store(false, Ordering::Relaxed);
     tauri::async_runtime::spawn_blocking(move || {
-        indexer::run(&app, &db_path, root_id, &ollama_url).map_err(|e| e.to_string())
+        indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cancel_indexing(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    log::info!("[cancel_indexing] setting cancel flag");
+    state.cancel_flag.store(true, Ordering::Relaxed);
+    log::info!("[cancel_indexing] flag is now: {}", state.cancel_flag.load(Ordering::Relaxed));
+    Ok(())
 }
 
 #[tauri::command]

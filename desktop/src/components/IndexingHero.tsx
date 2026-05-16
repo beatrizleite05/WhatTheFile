@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { LoaderCircle } from 'lucide-react';
+import { cancelIndexing } from '../api/indexing';
 import type { IndexingJob } from '../hooks/useIndexing';
 
 interface IndexingHeroProps {
@@ -80,6 +81,28 @@ export function IndexingHero({ activeJob }: IndexingHeroProps) {
       <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-xs)', textAlign: 'center' }}>
         You can start searching at any time — results will appear as files are indexed.
       </span>
+      <button
+        type="button"
+        onClick={() => {
+          console.log('[IndexingHero] cancel clicked');
+          cancelIndexing()
+            .then(() => console.log('[IndexingHero] cancelIndexing resolved'))
+            .catch((e) => console.error('[IndexingHero] cancelIndexing FAILED', e));
+        }}
+        style={{
+          marginTop: 4,
+          padding: '5px 14px',
+          borderRadius: 'var(--radius-pill)',
+          border: '1px solid var(--surface-border)',
+          background: 'rgba(255,255,255,0.05)',
+          color: 'var(--text-secondary)',
+          fontFamily: 'var(--font-system)',
+          fontSize: 'var(--font-size-xs)',
+          cursor: 'pointer',
+        }}
+      >
+        Cancel
+      </button>
     </div>
   );
 }
