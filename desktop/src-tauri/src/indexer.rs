@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use walkdir::WalkDir;
 use tauri::Emitter;
 use crate::{chunker, db, errors::AppError, extractor, llm};
@@ -106,13 +107,15 @@ pub fn run(
     db_path: &Path,
     root_id: i64,
     ollama_url: &str,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<i64, AppError> {
     let conn = db::open_and_migrate(db_path)?;
     let root = db::find_root_by_id(&conn, root_id)?
         .ok_or_else(|| AppError::Indexer(format!("root {root_id} not found")))?;
     let root_path = PathBuf::from(&root.path);
+    db::clear_root_index(&conn, root_id)?;
     let app = app.clone();
-    run_scan(&conn, root_id, &root_path, ollama_url, &|event, payload| {
+    run_scan(&conn, root_id, &root_path, ollama_url, cancel, &|event, payload| {
         let _ = app.emit(event, payload);
     })
 }
@@ -124,6 +127,7 @@ pub fn run_scan(
     root_id: i64,
     root_path: &Path,
     ollama_url: &str,
+    cancel: &Arc<AtomicBool>,
     emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<i64, AppError> {
     db::recover_interrupted_jobs(conn)?;
@@ -144,7 +148,14 @@ pub fn run_scan(
         "filesUpdated": 0, "filesMoved": 0, "filesDeleted": 0,
     }));
 
-    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, emit)?;
+    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, cancel, emit)?;
+
+    if cancel.load(Ordering::Relaxed) {
+        db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
+        emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
+        emit("index://changed", &serde_json::Value::Null);
+        return Err(AppError::Indexer("cancelled".into()));
+    }
 
     db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
     emit("indexing://progress", &serde_json::json!({
@@ -154,7 +165,14 @@ pub fn run_scan(
         "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
     }));
 
-    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, emit)?;
+    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, cancel, emit)?;
+
+    if cancel.load(Ordering::Relaxed) {
+        db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
+        emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
+        emit("index://changed", &serde_json::Value::Null);
+        return Err(AppError::Indexer("cancelled".into()));
+    }
 
     db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
     emit("indexing://progress", &serde_json::json!({
@@ -164,7 +182,15 @@ pub fn run_scan(
         "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
     }));
 
-    run_extraction(conn, root_id, root_path, ollama_url, &mut counts)?;
+    if let Err(e) = run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts) {
+        if cancel.load(Ordering::Relaxed) {
+            db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
+            emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
+            emit("index://changed", &serde_json::Value::Null);
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        return Err(e);
+    }
 
     let now = db::unix_now();
     counts.files_deleted = db::sweep_deleted_files(conn, root_id, marker, now)?;
@@ -182,6 +208,7 @@ pub fn run_scan(
         "filesDeleted": counts.files_deleted,
         "errorCount": counts.error_count,
     }));
+    emit("index://changed", &serde_json::Value::Null);
 
     // Release VRAM immediately after indexing completes.
     match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
@@ -201,6 +228,7 @@ fn run_discovery(
     marker: i64,
     job_id: i64,
     counts: &mut db::JobCounts,
+    cancel: &Arc<AtomicBool>,
     emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<Vec<FileCandidate>, AppError> {
     let mut candidates: Vec<FileCandidate> = Vec::new();
@@ -224,6 +252,11 @@ fn run_discovery(
         })
         .filter_map(|e| e.ok())
     {
+        if cancel.load(Ordering::Relaxed) {
+            log::info!("[indexer] cancel detected in discovery loop — stopping");
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+
         if !entry.file_type().is_file() {
             continue;
         }
@@ -295,9 +328,14 @@ fn run_fingerprinting(
     job_id: i64,
     candidates: Vec<FileCandidate>,
     counts: &mut db::JobCounts,
+    cancel: &Arc<AtomicBool>,
     emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<(), AppError> {
     for candidate in candidates {
+        if cancel.load(Ordering::Relaxed) {
+            log::info!("[indexer] cancel detected in fingerprinting loop — stopping");
+            return Err(AppError::Indexer("cancelled".into()));
+        }
         let bytes = match std::fs::read(&candidate.path) {
             Ok(b) => b,
             Err(_) => { counts.error_count += 1; continue; }
@@ -361,14 +399,25 @@ fn run_extraction(
     root_id: i64,
     root_path: &Path,
     ollama_url: &str,
+    cancel: &Arc<AtomicBool>,
     counts: &mut db::JobCounts,
 ) -> Result<(), AppError> {
     let pending = db::find_files_needing_extraction(conn, root_id)?;
+    log::info!("[indexer] extraction phase: {} files pending", pending.len());
     for (file_id, rel_path, _media_type) in pending {
+        if cancel.load(Ordering::Relaxed) {
+            log::info!("[indexer] cancel detected in extraction loop — stopping");
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        log::info!("[indexer] extracting: {}", rel_path);
         let abs_path = root_path.join(&rel_path);
         let now = db::unix_now();
-        match extractor::extract(&abs_path, ollama_url) {
+        match extractor::extract(&abs_path, ollama_url, cancel) {
             Ok(result) => {
+                if cancel.load(Ordering::Relaxed) {
+                    log::info!("[indexer] cancel detected after extraction — stopping");
+                    return Err(AppError::Indexer("cancelled".into()));
+                }
                 if result.text.is_empty() {
                     counts.error_count += 1;
                     continue;
@@ -376,6 +425,10 @@ fn run_extraction(
                 let chunks = chunker::chunk_text(&result.text, chunker::CHUNK_SIZE, chunker::CHUNK_OVERLAP);
                 let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
                 let embeddings_result = llm::embeddings::embed_texts(&chunk_texts, ollama_url);
+                if cancel.load(Ordering::Relaxed) {
+                    log::info!("[indexer] cancel detected after embedding — stopping");
+                    return Err(AppError::Indexer("cancelled".into()));
+                }
                 let embedding_blobs: Vec<Option<Vec<u8>>> = match embeddings_result {
                     Ok(vecs) => vecs.into_iter().map(|v| Some(llm::embeddings::embedding_to_bytes(&v))).collect(),
                     Err(_) => vec![None; chunks.len()],

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, atomic::AtomicBool};
 use crate::errors::AppError;
 use crate::llm::vision;
 
@@ -18,7 +19,7 @@ pub struct ExtractResult {
 ///
 /// Routes by file extension.  Images are described via the Ollama vision
 /// pipeline.  OCR is attempted for PDFs whose text layer is absent or empty.
-pub fn extract(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+pub fn extract(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<ExtractResult, AppError> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -31,8 +32,8 @@ pub fn extract(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError>
         "csv" => extract_csv(path),
         "xlsx" | "xls" | "xlsm" => extract_xlsx(path),
         "docx" => extract_docx(path),
-        "pdf" => pdf::extract_pdf(path, ollama_url),
-        "png" | "jpg" | "jpeg" | "webp" => extract_image(path, ollama_url),
+        "pdf" => pdf::extract_pdf(path, ollama_url, cancel),
+        "png" | "jpg" | "jpeg" | "webp" => extract_image(path, ollama_url, cancel),
         _ => Err(AppError::Extractor(format!(
             "unsupported file type: {}",
             path.display()
@@ -290,11 +291,11 @@ fn extract_docx(path: &Path) -> Result<ExtractResult, AppError> {
 
 // ── Images ────────────────────────────────────────────────────────────────────
 
-fn extract_image(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+fn extract_image(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<ExtractResult, AppError> {
     let path_str = path.to_str().ok_or_else(|| {
         AppError::Extractor(format!("invalid image path: {}", path.display()))
     })?;
-    let desc = vision::describe_image(path_str, ollama_url)?;
+    let desc = vision::describe_image(path_str, ollama_url, cancel)?;
     let lang_hint = detect_lang(&desc);
     Ok(ExtractResult { text: desc, confidence: pdf::VISION_CONFIDENCE, lang_hint })
 }

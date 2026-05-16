@@ -21,6 +21,9 @@
     "allow-delete-index",
     "allow-open-file",
     "allow-get-runtime-status",
-    "allow-parse-query"
+    "allow-parse-query",
+    "allow-cancel-indexing",
+    "allow-get-activity-log",
+    "dialog:allow-open"
   ]
 }

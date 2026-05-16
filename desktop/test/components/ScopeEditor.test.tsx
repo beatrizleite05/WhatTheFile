@@ -22,6 +22,7 @@ const settings = {
   addRoot: vi.fn().mockResolvedValue(undefined),
   removeRoot: vi.fn().mockResolvedValue(undefined),
   reindex: vi.fn(),
+  deleteIndex: vi.fn().mockResolvedValue(undefined),
 };
 
 describe('ScopeEditor', () => {
@@ -31,12 +32,12 @@ describe('ScopeEditor', () => {
   });
 
   it('shows loading state', () => {
-    render(<ScopeEditor settings={{ ...settings, loading: true }} />);
+    render(<ScopeEditor jobs={[]} settings={{ ...settings, loading: true }} />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
   it('shows empty state when no roots exist', () => {
-    render(<ScopeEditor settings={{ ...settings, roots: [] }} />);
+    render(<ScopeEditor jobs={[]} settings={{ ...settings, roots: [] }} />);
     expect(screen.getByText(/No folders indexed yet/i)).toBeInTheDocument();
   });
 
@@ -45,7 +46,7 @@ describe('ScopeEditor', () => {
     const addRoot = vi.fn().mockResolvedValue(undefined);
     mockOpen.mockResolvedValue('/Users/test/Pictures');
 
-    render(<ScopeEditor settings={{ ...settings, addRoot }} />);
+    render(<ScopeEditor jobs={[]} settings={{ ...settings, addRoot }} />);
     await user.click(screen.getByRole('button', { name: /Add folder/i }));
 
     expect(addRoot).toHaveBeenCalledWith('/Users/test/Pictures');
@@ -54,7 +55,7 @@ describe('ScopeEditor', () => {
   it('calls reindex for a root', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
     const reindex = vi.fn();
-    render(<ScopeEditor settings={{ ...settings, reindex }} />);
+    render(<ScopeEditor jobs={[]} settings={{ ...settings, reindex }} />);
 
     await user.click(screen.getByRole('button', { name: /Reindex Documents/i }));
     expect(reindex).toHaveBeenCalledWith(1);
@@ -63,7 +64,7 @@ describe('ScopeEditor', () => {
   it('calls remove for a root', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
     const removeRoot = vi.fn().mockResolvedValue(undefined);
-    render(<ScopeEditor settings={{ ...settings, removeRoot }} />);
+    render(<ScopeEditor jobs={[]} settings={{ ...settings, removeRoot }} />);
 
     await user.click(screen.getByRole('button', { name: /Remove Documents/i }));
     expect(removeRoot).toHaveBeenCalledWith(1);

@@ -16,6 +16,7 @@ const baseJob: IndexingJob = {
   errorCount: 0,
   progressPercent: 100,
   isComplete: true,
+  completedAt: 1700000000,
 };
 
 describe('ActivityLog', () => {

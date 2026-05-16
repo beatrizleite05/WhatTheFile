@@ -1,37 +1,34 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { invoke } from '@tauri-apps/api/core';
 import { DeleteIndexButton } from '../../src/components/DeleteIndexButton';
-
-const mockInvoke = vi.mocked(invoke);
 
 describe('DeleteIndexButton', () => {
   it('renders a delete button', () => {
-    render(<DeleteIndexButton />);
+    render(<DeleteIndexButton onDeleted={vi.fn().mockResolvedValue(undefined)} />);
     expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument();
   });
 
-  it('shows confirmation UI before calling delete_index', async () => {
+  it('shows confirmation UI before calling onDeleted', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
-    render(<DeleteIndexButton />);
+    render(<DeleteIndexButton onDeleted={vi.fn().mockResolvedValue(undefined)} />);
     await user.click(screen.getByRole('button', { name: /delete/i }));
     expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument();
   });
 
-  it('calls delete_index when confirmed', async () => {
-    mockInvoke.mockResolvedValue(undefined);
+  it('calls onDeleted when confirmed', async () => {
+    const onDeleted = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup({ advanceTimers: () => {} });
-    render(<DeleteIndexButton />);
+    render(<DeleteIndexButton onDeleted={onDeleted} />);
     await user.click(screen.getByRole('button', { name: /delete/i }));
     await user.click(screen.getByRole('button', { name: /confirm/i }));
-    expect(mockInvoke).toHaveBeenCalledWith('delete_index');
+    expect(onDeleted).toHaveBeenCalledOnce();
   });
 
   it('shows error when delete fails', async () => {
-    mockInvoke.mockRejectedValue('disk full');
+    const onDeleted = vi.fn().mockRejectedValue('disk full');
     const user = userEvent.setup({ advanceTimers: () => {} });
-    render(<DeleteIndexButton />);
+    render(<DeleteIndexButton onDeleted={onDeleted} />);
     await user.click(screen.getByRole('button', { name: /delete/i }));
     await user.click(screen.getByRole('button', { name: /confirm/i }));
     expect(await screen.findByText(/disk full/)).toBeInTheDocument();
@@ -39,7 +36,7 @@ describe('DeleteIndexButton', () => {
 
   it('cancel hides confirmation UI', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
-    render(<DeleteIndexButton />);
+    render(<DeleteIndexButton onDeleted={vi.fn().mockResolvedValue(undefined)} />);
     await user.click(screen.getByRole('button', { name: /delete/i }));
     await user.click(screen.getByRole('button', { name: /cancel/i }));
     expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument();

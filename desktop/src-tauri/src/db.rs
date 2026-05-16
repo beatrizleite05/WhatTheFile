@@ -13,7 +13,8 @@ pub use db_roots::{insert_root, find_root_by_path, find_root_by_id, update_root_
 pub use db_files::{find_file_by_path, find_file_by_fingerprint, upsert_file_metadata,
                    stamp_index_marker, move_file, sweep_deleted_files, update_file_content,
                    replace_chunks, find_files_needing_extraction};
-pub use db_jobs::{insert_job, update_job_phase, update_job_counts, complete_job, log_activity};
+pub use db_jobs::{insert_job, update_job_phase, update_job_counts, complete_job, log_activity,
+                   list_completed_jobs, CompletedJob};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -252,6 +253,56 @@ pub fn recover_interrupted_jobs(conn: &Connection) -> Result<(), AppError> {
         params![now],
     )?;
     Ok(())
+}
+
+pub fn clear_index(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "BEGIN;
+         DELETE FROM activity_log;
+         DELETE FROM chunks_vec;
+         DELETE FROM files;
+         DELETE FROM index_jobs;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
+pub fn clear_root_index(conn: &Connection, root_id: i64) -> Result<(), AppError> {
+    conn.execute_batch("SAVEPOINT clear_root")?;
+    let result = (|| -> Result<(), AppError> {
+        // 1. Drop all activity_log rows that reference anything owned by this root.
+        conn.execute(
+            "DELETE FROM activity_log
+             WHERE root_id = ?1
+                OR job_id  IN (SELECT id FROM index_jobs WHERE root_id = ?1)
+                OR file_id IN (SELECT id FROM files      WHERE root_id = ?1)",
+            params![root_id],
+        )?;
+        // 2. Drop vector embeddings before their parent chunks are removed.
+        conn.execute(
+            "DELETE FROM chunks_vec WHERE chunk_id IN (
+               SELECT c.id FROM chunks c JOIN files f ON c.file_id = f.id WHERE f.root_id = ?1
+             )",
+            params![root_id],
+        )?;
+        // 3. Drop chunks explicitly (files ON DELETE CASCADE would also do this,
+        //    but being explicit avoids any ordering ambiguity with the vec table).
+        conn.execute(
+            "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE root_id = ?1)",
+            params![root_id],
+        )?;
+        // 4. Drop jobs before files — activity_log.job_id has no CASCADE.
+        conn.execute("DELETE FROM index_jobs WHERE root_id = ?1", params![root_id])?;
+        // 5. Drop files last; no remaining FK references point at them.
+        conn.execute("DELETE FROM files WHERE root_id = ?1", params![root_id])?;
+        Ok(())
+    })();
+    if result.is_ok() {
+        conn.execute_batch("RELEASE clear_root")?;
+    } else {
+        conn.execute_batch("ROLLBACK TO clear_root")?;
+    }
+    result
 }
 
 #[cfg(test)]

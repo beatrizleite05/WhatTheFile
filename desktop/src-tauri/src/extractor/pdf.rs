@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, atomic::AtomicBool};
 use crate::errors::AppError;
 use crate::llm::vision;
 use super::{detect_lang, ExtractResult};
@@ -25,7 +26,7 @@ pub(super) fn pdfium_instance() -> Result<pdfium_render::prelude::Pdfium, AppErr
     Ok(Pdfium::new(bindings))
 }
 
-pub(super) fn extract_pdf(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<ExtractResult, AppError> {
     let path_str = path.to_str().ok_or_else(|| {
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;
@@ -55,14 +56,14 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str) -> Result<ExtractResult
 
     // No text layer — scanned PDF. Try OCR first; fall back to vision if OCR
     // confidence is too low or Tesseract is unavailable.
-    extract_pdf_via_ocr(path, ollama_url)
+    extract_pdf_via_ocr(path, ollama_url, cancel)
 }
 
 /// Rasterize a scanned PDF with pdfium and run Tesseract on each page.
 ///
 /// Pages whose mean word confidence is below `OCR_CONFIDENCE_THRESHOLD` are
 /// skipped and collected for a vision-model second pass.
-fn extract_pdf_via_ocr(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<ExtractResult, AppError> {
     use pdfium_render::prelude::*;
 
     let path_str = path.to_str().ok_or_else(|| {
@@ -114,12 +115,12 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str) -> Result<ExtractResult, A
     // If OCR produced nothing at all, fall through to full vision pass.
     if ocr_texts.is_empty() {
         log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
-        return extract_pdf_via_vision(path, ollama_url);
+        return extract_pdf_via_vision(path, ollama_url, cancel);
     }
 
     // For pages OCR couldn't handle, attempt vision on those pages only.
     if !low_conf_page_indices.is_empty() {
-        let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url);
+        let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url, cancel);
         ocr_texts.extend(vision_texts);
     }
 
@@ -166,7 +167,7 @@ pub(super) fn run_tesseract_on_rgba(
 
 /// Run vision model on a specific subset of pages from a PDF.
 /// Returns descriptions for pages that produce non-empty output; silently skips failures.
-fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url: &str) -> Vec<String> {
+fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url: &str, cancel: &Arc<AtomicBool>) -> Vec<String> {
     use pdfium_render::prelude::*;
 
     let pdfium = match pdfium_instance() {
@@ -239,7 +240,7 @@ fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url:
             None => continue,
         };
 
-        match vision::describe_image(tmp_path, ollama_url) {
+        match vision::describe_image(tmp_path, ollama_url, cancel) {
             Ok(desc) if !desc.trim().is_empty() => {
                 log::info!("vision fallback succeeded for page {page_idx} of {}", path.display());
                 descriptions.push(desc);
@@ -255,7 +256,7 @@ fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url:
     descriptions
 }
 
-fn extract_pdf_via_vision(path: &Path, ollama_url: &str) -> Result<ExtractResult, AppError> {
+fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<ExtractResult, AppError> {
     use pdfium_render::prelude::*;
 
     let path_str = path.to_str().ok_or_else(|| {
@@ -306,8 +307,7 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str) -> Result<ExtractResult
         let tmp_path = tmp.path().to_str().ok_or_else(|| {
             AppError::Extractor("tmp path is not valid UTF-8".into())
         })?;
-
-        match vision::describe_image(tmp_path, ollama_url) {
+        match vision::describe_image(tmp_path, ollama_url, cancel) {
             Ok(desc) if !desc.trim().is_empty() => descriptions.push(desc),
             Ok(_) => {}
             Err(_) => {} // skip pages where vision fails

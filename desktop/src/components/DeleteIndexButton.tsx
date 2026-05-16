@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Trash2, AlertTriangle } from 'lucide-react';
-import { deleteIndex } from '../api/settings';
 import { errorMessage } from '../utils';
 
-export function DeleteIndexButton() {
+interface DeleteIndexButtonProps {
+  onDeleted: () => Promise<void>;
+}
+
+export function DeleteIndexButton({ onDeleted }: DeleteIndexButtonProps) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -12,7 +15,7 @@ export function DeleteIndexButton() {
     setDeleting(true);
     setError(null);
     try {
-      await deleteIndex();
+      await onDeleted();
       setConfirming(false);
     } catch (e) {
       setError(errorMessage(e));

@@ -46,6 +46,10 @@ export function OnboardingFlow({ onComplete, settings }: OnboardingFlowProps) {
   }
 
   async function handleGetStarted() {
+    for (const root of settings.roots) {
+      await settings.removeRoot(root.id).catch(() => {});
+    }
+
     for (const preset of PRESETS) {
       if (!selected.has(preset.label)) continue;
       try {

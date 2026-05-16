@@ -6,6 +6,7 @@ import { PreviewPane } from './PreviewPane';
 import { OllamaBanner } from './OllamaBanner';
 import { SkipWarningBanner } from './SkipWarningBanner';
 import { IndexingProgress } from './IndexingProgress';
+import { IndexingHero } from './IndexingHero';
 import { Settings } from 'lucide-react';
 import { openFile } from '../api/runtime';
 import { removeFirstToken } from '../utils';
@@ -138,17 +139,22 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
           data-testid="overlay-results-pane"
           style={{ display: 'flex', flex: previewResult ? 3 : 1, minWidth: 0 }}
         >
-          <ResultGrid
-            ref={gridRef}
-            results={search.results}
-            query={search.query}
-            hasMore={search.hasMore}
-            loading={search.loading}
-            onOpen={handleOpen}
-            onSelect={handleSelect}
-            onApplySuggestion={search.setQuery}
-            onLoadMore={search.loadMore}
-          />
+          {search.query.length === 0 && indexing.activeJob ? (
+            <IndexingHero activeJob={indexing.activeJob} />
+          ) : (
+            <ResultGrid
+              ref={gridRef}
+              results={search.results}
+              query={search.query}
+              hasMore={search.hasMore}
+              loading={search.loading}
+              indexingActive={indexing.activeJob !== null}
+              onOpen={handleOpen}
+              onSelect={handleSelect}
+              onApplySuggestion={search.setQuery}
+              onLoadMore={search.loadMore}
+            />
+          )}
         </div>
 
         {previewResult && (

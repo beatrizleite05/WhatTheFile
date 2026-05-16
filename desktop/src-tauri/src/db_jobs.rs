@@ -72,6 +72,43 @@ pub fn complete_job(
     Ok(())
 }
 
+pub struct CompletedJob {
+    pub job_id: i64,
+    pub root_id: i64,
+    pub files_total: i64,
+    pub files_added: i64,
+    pub files_updated: i64,
+    pub files_moved: i64,
+    pub files_deleted: i64,
+    pub error_count: i64,
+    pub completed_at: i64,
+}
+
+pub fn list_completed_jobs(conn: &Connection, limit: i64) -> Result<Vec<CompletedJob>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, root_id, files_total, files_added, files_updated, files_moved,
+                files_deleted, error_count, completed_at
+         FROM index_jobs
+         WHERE status = 'completed' AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |row| {
+        Ok(CompletedJob {
+            job_id: row.get(0)?,
+            root_id: row.get(1)?,
+            files_total: row.get(2)?,
+            files_added: row.get(3)?,
+            files_updated: row.get(4)?,
+            files_moved: row.get(5)?,
+            files_deleted: row.get(6)?,
+            error_count: row.get(7)?,
+            completed_at: row.get(8)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(AppError::from)
+}
+
 pub fn log_activity(
     conn: &Connection,
     event_type: &str,

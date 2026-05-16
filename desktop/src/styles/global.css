@@ -84,3 +84,8 @@ a,
   background: var(--surface-bg-solid);
   border-radius: var(--radius-container);
 }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

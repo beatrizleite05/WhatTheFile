@@ -11,8 +11,8 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
-  const settings = useSettings();
   const indexing = useIndexing();
+  const settings = useSettings(indexing.startIndexing);
 
   return (
     <div
@@ -48,7 +48,7 @@ export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
         <h1 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 700, margin: 0 }}>Settings</h1>
       </div>
 
-      <ScopeEditor settings={settings} />
+      <ScopeEditor settings={settings} jobs={indexing.jobs} />
 
       <hr style={{ border: 'none', borderTop: '1px solid var(--divider)' }} />
 
@@ -63,7 +63,7 @@ export function SettingsView({ onBack, onResetOnboarding }: SettingsViewProps) {
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', margin: 0 }}>
           Permanently remove all indexed data. Your source files will not be affected.
         </p>
-        <DeleteIndexButton />
+        <DeleteIndexButton onDeleted={settings.deleteIndex} />
       </div>
 
       <hr style={{ border: 'none', borderTop: '1px solid var(--divider)' }} />

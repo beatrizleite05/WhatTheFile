@@ -10,9 +10,9 @@ import { SettingsView } from './components/SettingsView';
 type View = 'main' | 'settings';
 
 export default function App() {
-  const settings = useSettings();
-  const ollamaStatus = useOllamaStatus();
   const indexing = useIndexing();
+  const settings = useSettings(indexing.startIndexing);
+  const ollamaStatus = useOllamaStatus();
   const search = useSearch();
 
   const [view, setView] = useState<View>('main');

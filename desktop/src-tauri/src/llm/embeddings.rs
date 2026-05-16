@@ -29,7 +29,7 @@ pub fn embed_texts(texts: &[&str], ollama_url: &str) -> Result<Vec<Vec<f32>>, Ap
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(120))
+        .timeout_read(std::time::Duration::from_secs(30))
         .build();
 
     let resp = agent
