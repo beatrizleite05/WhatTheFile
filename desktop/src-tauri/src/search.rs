@@ -144,7 +144,8 @@ pub fn search_files(
     // Lower distance = more similar (KNN L2; equivalent to cosine for unit vectors).
     let mut vec_map: HashMap<i64, (f64, i64)> = HashMap::new();
     if run_vec {
-        let embedding = embeddings::embed_text(&query.query_text, ollama_url)?;
+        let no_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let embedding = embeddings::embed_text(&query.query_text, ollama_url, &no_cancel)?;
         let query_blob = embeddings::embedding_to_bytes(&embedding);
         let mut stmt = conn.prepare(
             "SELECT cv.chunk_id, c.file_id, cv.distance

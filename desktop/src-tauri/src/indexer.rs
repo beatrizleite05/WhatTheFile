@@ -135,6 +135,10 @@ impl<'a> ProgressEmitter<'a> {
         self.extraction_done += 1;
     }
 
+    fn clear_current_file(&mut self) {
+        self.last_current_file = None;
+    }
+
     fn build_payload(&self, phase: &str, counts: &db::JobCounts) -> serde_json::Value {
         serde_json::json!({
             "jobId": self.job_id,
@@ -226,46 +230,60 @@ pub fn run_scan(
     let job_id = db::insert_job(conn, root_id, marker, now)?;
     db::log_activity(conn, "job_started", Some(root_id), None, Some(job_id), None, now)?;
 
+    match run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit) {
+        Ok(()) => Ok(job_id),
+        Err(e) => {
+            let final_phase = if cancel.load(Ordering::Relaxed) || is_cancelled_error(&e) {
+                "cancelled"
+            } else {
+                "interrupted"
+            };
+            let now = db::unix_now();
+            let _ = db::update_job_phase(conn, job_id, final_phase, now);
+            if final_phase == "cancelled" {
+                emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
+            }
+            emit("index://changed", &serde_json::Value::Null);
+            Err(e)
+        }
+    }
+}
+
+fn is_cancelled_error(e: &AppError) -> bool {
+    matches!(e, AppError::Indexer(msg) if msg == "cancelled")
+}
+
+fn run_scan_inner(
+    conn: &Connection,
+    job_id: i64,
+    root_id: i64,
+    root_path: &Path,
+    marker: i64,
+    ollama_url: &str,
+    cancel: &Arc<AtomicBool>,
+    emit: &dyn Fn(&str, &serde_json::Value),
+) -> Result<(), AppError> {
     let mut counts = db::JobCounts::default();
     let mut progress = ProgressEmitter::new(job_id, root_id, emit);
 
     progress.emit_now(conn, "discovering", &counts, None)?;
-
     let candidates = run_discovery(conn, root_id, root_path, marker, &mut counts, cancel, &mut progress)?;
+    progress.clear_current_file();
     progress.emit_now(conn, "discovering", &counts, None)?;
 
-    if cancel.load(Ordering::Relaxed) {
-        db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
-        emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
-        emit("index://changed", &serde_json::Value::Null);
-        return Err(AppError::Indexer("cancelled".into()));
-    }
+    check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
     progress.emit_now(conn, "fingerprinting", &counts, None)?;
-
     run_fingerprinting(conn, root_id, marker, candidates, &mut counts, cancel, &mut progress)?;
+    progress.clear_current_file();
     progress.emit_now(conn, "fingerprinting", &counts, None)?;
 
-    if cancel.load(Ordering::Relaxed) {
-        db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
-        emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
-        emit("index://changed", &serde_json::Value::Null);
-        return Err(AppError::Indexer("cancelled".into()));
-    }
+    check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
     progress.emit_now(conn, "extracting", &counts, None)?;
-
-    if let Err(e) = run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts, &mut progress) {
-        if cancel.load(Ordering::Relaxed) {
-            db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
-            emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
-            emit("index://changed", &serde_json::Value::Null);
-            return Err(AppError::Indexer("cancelled".into()));
-        }
-        return Err(e);
-    }
+    run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts, &mut progress)?;
     progress.emit_now(conn, "extracting", &counts, None)?;
 
     let now = db::unix_now();
@@ -286,13 +304,20 @@ pub fn run_scan(
     }));
     emit("index://changed", &serde_json::Value::Null);
 
-    // Release VRAM immediately after indexing completes.
     match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
         Ok(()) => log::info!("unloaded embedding model (nomic-embed-text-v2-moe)"),
         Err(e) => log::warn!("unload embedding model failed (will remain in VRAM): {e}"),
     }
 
-    Ok(job_id)
+    Ok(())
+}
+
+fn check_cancel(cancel: &Arc<AtomicBool>) -> Result<(), AppError> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(AppError::Indexer("cancelled".into()))
+    } else {
+        Ok(())
+    }
 }
 
 fn run_discovery(
@@ -485,7 +510,7 @@ fn run_extraction(
                 }
                 let chunks = chunker::chunk_text(&result.text, chunker::CHUNK_SIZE, chunker::CHUNK_OVERLAP);
                 let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-                let embeddings_result = llm::embeddings::embed_texts(&chunk_texts, ollama_url);
+                let embeddings_result = llm::embeddings::embed_texts(&chunk_texts, ollama_url, cancel);
                 if cancel.load(Ordering::Relaxed) {
                     log::info!("[indexer] cancel detected after embedding — stopping");
                     return Err(AppError::Indexer("cancelled".into()));

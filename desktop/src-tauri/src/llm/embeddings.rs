@@ -1,26 +1,57 @@
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::time::Duration;
 use crate::errors::AppError;
 
-/// nomic-embed-text-v2-moe returns 768-dimensional embeddings.
-/// The db schema (chunks_vec) and this constant must stay in sync.
 const MODEL: &str = "nomic-embed-text-v2-moe";
 pub const EXPECTED_DIM: usize = 768;
+const EMBED_TIMEOUT_SECS: u64 = 180;
 
-pub fn embed_text(text: &str, ollama_url: &str) -> Result<Vec<f32>, AppError> {
-    let mut results = embed_texts(&[text], ollama_url)?;
+pub fn embed_text(text: &str, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Result<Vec<f32>, AppError> {
+    let mut results = embed_texts(&[text], ollama_url, cancel)?;
     results.pop().ok_or_else(|| AppError::Llm("empty embeddings array in response".into()))
 }
 
-/// Embed a batch of texts in a single Ollama request using `/api/embed`.
-///
-/// Ollama 0.1.31+ accepts `input` as an array, returning one embedding per
-/// element in the same order.  This reduces N per-chunk HTTP round-trips to
-/// one call per file during the indexing extraction pass.
-pub fn embed_texts(texts: &[&str], ollama_url: &str) -> Result<Vec<Vec<f32>>, AppError> {
+pub fn embed_texts(
+    texts: &[&str],
+    ollama_url: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Vec<Vec<f32>>, AppError> {
     if texts.is_empty() {
         return Ok(vec![]);
     }
 
+    let owned: Vec<String> = texts.iter().map(|s| (*s).to_string()).collect();
     let url = format!("{ollama_url}/api/embed");
+
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(call_ollama(&url, &owned));
+    });
+
+    let mut elapsed = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                elapsed += 1;
+                if elapsed >= EMBED_TIMEOUT_SECS {
+                    return Err(AppError::Llm(format!(
+                        "ollama embed timed out after {EMBED_TIMEOUT_SECS}s ({MODEL})"
+                    )));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AppError::Llm(format!("ollama embed thread disconnected ({MODEL})")));
+            }
+        }
+    }
+}
+
+fn call_ollama(url: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, AppError> {
     let body = serde_json::json!({
         "model": MODEL,
         "input": texts,
@@ -28,12 +59,12 @@ pub fn embed_texts(texts: &[&str], ollama_url: &str) -> Result<Vec<Vec<f32>>, Ap
     });
 
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(30))
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(EMBED_TIMEOUT_SECS))
         .build();
 
     let resp = agent
-        .post(&url)
+        .post(url)
         .send_json(body)
         .map_err(|e| AppError::Llm(format!("batch embed request failed: {e}")))?;
 
@@ -41,7 +72,6 @@ pub fn embed_texts(texts: &[&str], ollama_url: &str) -> Result<Vec<Vec<f32>>, Ap
         .into_json()
         .map_err(|e| AppError::Llm(format!("batch embed response parse failed: {e}")))?;
 
-    // `/api/embed` returns `{ "embeddings": [[...], [...]] }`
     let arr = json["embeddings"]
         .as_array()
         .ok_or_else(|| AppError::Llm("missing 'embeddings' field in batch response".into()))?;
@@ -75,9 +105,13 @@ pub fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn cancel_flag() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     #[test]
     fn test_embed_text_ollama_unreachable() {
-        let result = embed_text("hello world", "http://127.0.0.1:19999");
+        let result = embed_text("hello world", "http://127.0.0.1:19999", &cancel_flag());
         assert!(
             matches!(result, Err(AppError::Llm(_))),
             "expected Llm error when Ollama unreachable, got: {result:?}"
@@ -86,18 +120,27 @@ mod tests {
 
     #[test]
     fn test_embed_texts_empty_input_returns_empty() {
-        // Empty slice must short-circuit without hitting the network.
-        let result = embed_texts(&[], "http://127.0.0.1:19999");
+        let result = embed_texts(&[], "http://127.0.0.1:19999", &cancel_flag());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
     }
 
     #[test]
     fn test_embed_texts_ollama_unreachable() {
-        let result = embed_texts(&["hello", "world"], "http://127.0.0.1:19999");
+        let result = embed_texts(&["hello", "world"], "http://127.0.0.1:19999", &cancel_flag());
         assert!(
             matches!(result, Err(AppError::Llm(_))),
             "expected Llm error when Ollama unreachable, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_embed_texts_returns_cancelled_when_flag_set() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let result = embed_texts(&["hello"], "http://127.0.0.1:19999", &cancel);
+        assert!(
+            matches!(&result, Err(AppError::Indexer(msg)) if msg == "cancelled"),
+            "expected Indexer(\"cancelled\"), got: {result:?}"
         );
     }
 

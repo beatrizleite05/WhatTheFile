@@ -62,7 +62,9 @@ pub fn run() {
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(app_data.join("db"))?;
             let db_path = app_data.join("db").join("index.sqlite");
-            db::open_and_migrate(&db_path)?;
+            let conn = db::open_and_migrate(&db_path)?;
+            db::recover_interrupted_jobs(&conn)?;
+            drop(conn);
             let ollama_url = llm::runtime::OLLAMA_BASE_URL.to_string();
             app.manage(AppState {
                 db_path,

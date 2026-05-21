@@ -485,6 +485,49 @@ fn test_progress_events_include_error_count_field() {
 }
 
 #[test]
+fn test_cancel_before_extraction_marks_job_cancelled() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "alpha");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let cancel = Arc::new(AtomicBool::new(true));
+
+    let result = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &cancel, &no_emit);
+    assert!(result.is_err());
+
+    let phase: String = conn.query_row(
+        "SELECT phase FROM index_jobs ORDER BY id DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(phase, "cancelled");
+}
+
+#[test]
+fn test_phase_transition_clears_current_file_in_payload() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "alpha.txt", "alpha");
+    write_file(&root_dir, "bravo.md", "bravo");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let (emit, events) = recording_emit();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &emit).unwrap();
+
+    let progress = events.progress();
+    let first_fp = progress.iter()
+        .find(|p| p.get("phase").and_then(|v| v.as_str()) == Some("fingerprinting"))
+        .expect("expected at least one fingerprinting event");
+    assert!(
+        first_fp.get("currentFile").map(|v| v.is_null()).unwrap_or(false),
+        "phase-transition emit into fingerprinting must carry currentFile=null, got: {first_fp:?}"
+    );
+}
+
+#[test]
 fn test_initial_event_reflects_real_total_before_extraction() {
     let (tmp, conn) = setup_db();
     let root_dir = tmp.path().join("root");

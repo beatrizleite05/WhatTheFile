@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use crate::errors::AppError;
 use crate::llm::vision;
 use super::{detect_lang, ExtractResult};
@@ -36,9 +36,11 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
 
-    // Extract text layer from each page.
     let mut text = String::new();
     for page in doc.pages().iter() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
         let page_text = page.text()
             .map_err(|e| AppError::Extractor(format!("pdfium text error: {e}")))?
             .all();
@@ -88,6 +90,9 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
     let tessdata = crate::platform::tessdata_dir();
 
     for (page_idx, page) in doc.pages().iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| AppError::Extractor(format!("pdfium render error page {page_idx}: {e}")))?;
@@ -189,6 +194,9 @@ fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url:
 
     let mut descriptions = Vec::new();
     for &page_idx in page_indices.iter() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let page = match doc.pages().get(page_idx as u16) {
             Ok(p) => p,
             Err(_) => continue,
@@ -275,6 +283,9 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
     let mut descriptions = Vec::new();
 
     for page in doc.pages().iter() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| AppError::Extractor(format!("pdfium render error: {e}")))?;

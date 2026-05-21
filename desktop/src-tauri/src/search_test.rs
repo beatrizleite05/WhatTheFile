@@ -651,7 +651,7 @@ fn test_integration_semantic_returns_relevant_result() {
             100, now * 1_000_000_000, &format!("fp-{path}"), "ext-v1", now, now,
         ).unwrap();
         db::update_file_content(&conn, id, text, 1.0, "en", "ext-v1", now).unwrap();
-        let emb = crate::llm::embeddings::embed_text(text, ollama).unwrap();
+        let emb = crate::llm::embeddings::embed_text(text, ollama, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).unwrap();
         let blob = crate::llm::embeddings::embedding_to_bytes(&emb);
         db::replace_chunks(&conn, id, &[(0, text, Some(blob.as_slice()))]).unwrap();
     }
@@ -685,7 +685,7 @@ fn test_integration_semantic_ranks_relevant_above_unrelated() {
             100, now * 1_000_000_000, &format!("fp-{path}"), "ext-v1", now, now,
         ).unwrap();
         db::update_file_content(&conn, id, text, 1.0, "en", "ext-v1", now).unwrap();
-        let emb = crate::llm::embeddings::embed_text(text, ollama).unwrap();
+        let emb = crate::llm::embeddings::embed_text(text, ollama, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).unwrap();
         let blob = crate::llm::embeddings::embedding_to_bytes(&emb);
         db::replace_chunks(&conn, id, &[(0, text, Some(blob.as_slice()))]).unwrap();
     }
@@ -722,7 +722,7 @@ fn test_integration_hybrid_both_passes_score_higher_than_single_pass() {
             100, now * 1_000_000_000, &format!("fp-{path}"), "ext-v1", now, now,
         ).unwrap();
         db::update_file_content(&conn, id, text, 1.0, "en", "ext-v1", now).unwrap();
-        let emb = crate::llm::embeddings::embed_text(text, ollama).unwrap();
+        let emb = crate::llm::embeddings::embed_text(text, ollama, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).unwrap();
         let blob = crate::llm::embeddings::embedding_to_bytes(&emb);
         db::replace_chunks(&conn, id, &[(0, text, Some(blob.as_slice()))]).unwrap();
     }
@@ -767,7 +767,7 @@ fn test_integration_hybrid_semantic_filters_applied_after_rrf() {
         100, now * 1_000_000_000, "fp-pdf", "ext-v1", now, now,
     ).unwrap();
     db::update_file_content(&conn, pdf_id, pdf_text, 1.0, "en", "ext-v1", now).unwrap();
-    let emb = crate::llm::embeddings::embed_text(pdf_text, ollama).unwrap();
+    let emb = crate::llm::embeddings::embed_text(pdf_text, ollama, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).unwrap();
     let blob = crate::llm::embeddings::embedding_to_bytes(&emb);
     db::replace_chunks(&conn, pdf_id, &[(0, pdf_text, Some(blob.as_slice()))]).unwrap();
 
@@ -776,7 +776,7 @@ fn test_integration_hybrid_semantic_filters_applied_after_rrf() {
         100, now * 1_000_000_000, "fp-txt", "ext-v1", now, now,
     ).unwrap();
     db::update_file_content(&conn, txt_id, txt_text, 1.0, "en", "ext-v1", now).unwrap();
-    let emb2 = crate::llm::embeddings::embed_text(txt_text, ollama).unwrap();
+    let emb2 = crate::llm::embeddings::embed_text(txt_text, ollama, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).unwrap();
     let blob2 = crate::llm::embeddings::embedding_to_bytes(&emb2);
     db::replace_chunks(&conn, txt_id, &[(0, txt_text, Some(blob2.as_slice()))]).unwrap();
 
