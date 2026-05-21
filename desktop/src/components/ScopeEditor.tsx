@@ -97,9 +97,12 @@ export function ScopeEditor({ settings, jobs }: ScopeEditorProps) {
             {(() => {
               const activeJob = jobs.find((j) => j.rootId === root.id && !j.isComplete);
               if (activeJob) {
+                const useExtraction = activeJob.phase === 'extracting' && activeJob.extractionTotal > 0;
+                const done = useExtraction ? activeJob.extractionDone : activeJob.filesDone;
+                const total = useExtraction ? activeJob.extractionTotal : activeJob.filesTotal;
                 return (
                   <div style={{ color: 'var(--accent)', fontSize: 'var(--font-size-xs)', fontFamily: 'var(--font-mono)' }}>
-                    {PHASE_LABELS[activeJob.phase]}{activeJob.filesTotal > 0 ? ` ${activeJob.filesDone}/${activeJob.filesTotal}` : ''}
+                    {PHASE_LABELS[activeJob.phase]}{total > 0 ? ` ${done}/${total}` : ''}
                   </div>
                 );
               }

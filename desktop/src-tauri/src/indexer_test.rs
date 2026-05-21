@@ -372,3 +372,134 @@ fn test_file_in_code_repo_gets_reduced_confidence() {
         standalone.1,
     );
 }
+
+#[derive(Default)]
+struct CapturedEvents {
+    inner: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl CapturedEvents {
+    fn push(&self, event: String, payload: serde_json::Value) {
+        self.inner.lock().unwrap().push((event, payload));
+    }
+
+    fn progress(&self) -> Vec<serde_json::Value> {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(e, _)| e == "indexing://progress")
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+}
+
+fn recording_emit() -> (impl Fn(&str, &serde_json::Value), Arc<CapturedEvents>) {
+    let events = Arc::new(CapturedEvents::default());
+    let captured = events.clone();
+    let f = move |event: &str, payload: &serde_json::Value| {
+        captured.push(event.to_string(), payload.clone());
+    };
+    (f, events)
+}
+
+#[test]
+fn test_index_jobs_table_records_total_and_done_for_small_run() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "alpha");
+    write_file(&root_dir, "b.md", "bravo");
+    write_file(&root_dir, "c.csv", "charlie");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
+
+    let (total, done): (i64, i64) = conn.query_row(
+        "SELECT files_total, files_done FROM index_jobs WHERE id = ?1",
+        params![job_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+
+    assert_eq!(total, 3);
+    assert_eq!(done, 3);
+}
+
+#[test]
+fn test_progress_event_includes_current_file_during_extraction() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "alpha.txt", "alpha content");
+    write_file(&root_dir, "bravo.md", "bravo content");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let (emit, events) = recording_emit();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &emit).unwrap();
+
+    let extracting: Vec<_> = events.progress().into_iter()
+        .filter(|p| p.get("phase").and_then(|v| v.as_str()) == Some("extracting"))
+        .collect();
+
+    assert!(!extracting.is_empty(), "extraction phase must emit progress");
+    let has_current_file = extracting.iter().any(|p| {
+        matches!(p.get("currentFile").and_then(|v| v.as_str()), Some("alpha.txt") | Some("bravo.md"))
+    });
+    assert!(has_current_file, "extraction events must carry currentFile, got: {extracting:?}");
+}
+
+#[test]
+fn test_extraction_phase_writes_cursor_path_to_index_jobs() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "notes.txt", "content for extraction");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let job_id = run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &no_emit).unwrap();
+
+    let cursor: Option<String> = conn.query_row(
+        "SELECT cursor_path FROM index_jobs WHERE id = ?1",
+        params![job_id],
+        |r| r.get(0),
+    ).unwrap();
+    assert_eq!(cursor.as_deref(), Some("notes.txt"));
+}
+
+#[test]
+fn test_progress_events_include_error_count_field() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    write_file(&root_dir, "a.txt", "hello");
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let (emit, events) = recording_emit();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &emit).unwrap();
+
+    let progress = events.progress();
+    assert!(!progress.is_empty());
+    for evt in &progress {
+        assert!(evt.get("errorCount").is_some(), "missing errorCount in {evt:?}");
+    }
+}
+
+#[test]
+fn test_initial_event_reflects_real_total_before_extraction() {
+    let (tmp, conn) = setup_db();
+    let root_dir = tmp.path().join("root");
+    std::fs::create_dir(&root_dir).unwrap();
+    for i in 0..5 {
+        write_file(&root_dir, &format!("{i}.txt"), &format!("file {i}"));
+    }
+
+    let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
+    let (emit, events) = recording_emit();
+    run_scan(&conn, root.id, &root_dir, "http://localhost:11434", &no_cancel(), &emit).unwrap();
+
+    let first_extracting = events.progress().into_iter()
+        .find(|p| p.get("phase").and_then(|v| v.as_str()) == Some("extracting"))
+        .expect("at least one extracting event");
+    let total = first_extracting.get("filesTotal").and_then(|v| v.as_i64()).unwrap_or(-1);
+    assert_eq!(total, 5, "filesTotal must be set by the time extraction starts, got: {first_extracting:?}");
+}
