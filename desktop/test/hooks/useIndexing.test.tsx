@@ -2,8 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { listen } from '@tauri-apps/api/event';
 import { useIndexing } from '../../src/hooks/useIndexing';
+import { startIndexing as apiStartIndexing, cancelIndexing as apiCancelIndexing } from '../../src/api/indexing';
+
+vi.mock('../../src/api/indexing', () => ({
+  startIndexing: vi.fn().mockResolvedValue(1),
+  cancelIndexing: vi.fn().mockResolvedValue(undefined),
+  getActivityLog: vi.fn().mockResolvedValue([]),
+}));
 
 const mockListen = vi.mocked(listen);
+const mockApiStartIndexing = vi.mocked(apiStartIndexing);
+const mockApiCancelIndexing = vi.mocked(apiCancelIndexing);
 
 type EventHandler = (e: { payload: unknown }) => void;
 
@@ -190,5 +199,68 @@ describe('useIndexing', () => {
     });
 
     expect(result.current.jobs[0].currentFile).toBe('notes.md');
+  });
+
+  it('startIndexing awaits listener registration before invoking the IPC', async () => {
+    let resolveListen: (() => void) | null = null;
+    mockListen.mockImplementation(() => {
+      return new Promise<() => void>((resolve) => {
+        resolveListen = () => resolve(() => {});
+      });
+    });
+
+    const { result } = renderHook(() => useIndexing());
+    await act(async () => {});
+
+    const startPromise = result.current.startIndexing(7);
+    expect(mockApiStartIndexing).not.toHaveBeenCalled();
+
+    await act(async () => {
+      while (resolveListen) {
+        const r = resolveListen;
+        resolveListen = null;
+        r();
+        await Promise.resolve();
+      }
+    });
+    await act(async () => { await startPromise; });
+
+    expect(mockApiStartIndexing).toHaveBeenCalledWith(7);
+  });
+
+  it('marks job complete on indexing://completed even without prior progress event', async () => {
+    const handlers = captureHandlers();
+    const { result } = renderHook(() => useIndexing());
+    await act(async () => {});
+
+    act(() => {
+      handlers['indexing://completed']?.({
+        payload: { jobId: 42, rootId: 9, filesTotal: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 },
+      });
+    });
+
+    expect(result.current.jobs).toHaveLength(1);
+    expect(result.current.jobs[0].jobId).toBe(42);
+    expect(result.current.jobs[0].isComplete).toBe(true);
+    expect(result.current.activeJob).toBeNull();
+  });
+
+  it('cancelIndexing optimistically dismisses the hero before the cancelled event arrives', async () => {
+    const handlers = captureHandlers();
+    const { result } = renderHook(() => useIndexing());
+    await act(async () => {});
+
+    act(() => {
+      handlers['indexing://progress']?.({
+        payload: { jobId: 5, rootId: 3, phase: 'extracting', filesTotal: 100, filesDone: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: 'foo.pdf', extractionTotal: 10, extractionDone: 1 },
+      });
+    });
+    expect(result.current.activeJob).not.toBeNull();
+
+    await act(async () => { await result.current.cancelIndexing(); });
+
+    expect(result.current.activeJob).toBeNull();
+    expect(mockApiCancelIndexing).toHaveBeenCalled();
+    expect(result.current.jobs[0].isComplete).toBe(true);
   });
 });

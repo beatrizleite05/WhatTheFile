@@ -16,7 +16,7 @@ const makeSearch = (overrides: Partial<UseSearchReturn> = {}): UseSearchReturn =
 });
 
 const makeIndexing = (overrides: Partial<UseIndexingReturn> = {}): UseIndexingReturn => ({
-  jobs: [], activeJob: null, startIndexing: vi.fn(), ...overrides,
+  jobs: [], activeJob: null, startIndexing: vi.fn(), cancelIndexing: vi.fn(), cancelPending: false, ...overrides,
 });
 
 const makeOllama = (overrides: Partial<UseOllamaStatusReturn> = {}): UseOllamaStatusReturn => ({

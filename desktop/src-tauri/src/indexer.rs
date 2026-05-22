@@ -168,6 +168,11 @@ impl<'a> ProgressEmitter<'a> {
             self.last_current_file = Some(path.to_string());
         }
         db::update_job_progress(conn, self.job_id, counts, self.last_current_file.as_deref(), db::unix_now())?;
+        log::debug!(
+            "[progress-emit] job={} phase={} total={} done={} extTotal={} extDone={} currentFile={:?}",
+            self.job_id, phase, counts.files_total, counts.files_done,
+            self.extraction_total, self.extraction_done, self.last_current_file,
+        );
         (self.emit)("indexing://progress", &self.build_payload(phase, counts));
         self.last_emit = Instant::now();
         Ok(())
@@ -230,17 +235,21 @@ pub fn run_scan(
     let job_id = db::insert_job(conn, root_id, marker, now)?;
     db::log_activity(conn, "job_started", Some(root_id), None, Some(job_id), None, now)?;
 
+    log::info!("[run_scan] job={job_id} root={root_id} starting");
     match run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit) {
-        Ok(()) => Ok(job_id),
+        Ok(()) => {
+            log::info!("[run_scan] job={job_id} completed");
+            Ok(job_id)
+        }
         Err(e) => {
-            let final_phase = if cancel.load(Ordering::Relaxed) || is_cancelled_error(&e) {
-                "cancelled"
-            } else {
-                "interrupted"
-            };
+            let cancelled = cancel.load(Ordering::Relaxed) || is_cancelled_error(&e);
+            let final_phase = if cancelled { "cancelled" } else { "interrupted" };
+            log::warn!(
+                "[run_scan] job={job_id} ended in error path: cancelled={cancelled} final_phase={final_phase} err={e:?}"
+            );
             let now = db::unix_now();
             let _ = db::update_job_phase(conn, job_id, final_phase, now);
-            if final_phase == "cancelled" {
+            if cancelled {
                 emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
             }
             emit("index://changed", &serde_json::Value::Null);

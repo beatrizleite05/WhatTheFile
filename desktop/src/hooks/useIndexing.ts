@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { startIndexing as apiStartIndexing } from '../api/indexing';
+import { startIndexing as apiStartIndexing, cancelIndexing as apiCancelIndexing } from '../api/indexing';
 
 export interface IndexingJob {
   jobId: number;
@@ -25,6 +25,8 @@ export interface UseIndexingReturn {
   jobs: IndexingJob[];
   activeJob: IndexingJob | null;
   startIndexing: (rootId: number) => Promise<void>;
+  cancelIndexing: () => Promise<void>;
+  cancelPending: boolean;
 }
 
 interface ProgressPayload {
@@ -69,20 +71,17 @@ export function useIndexing(): UseIndexingReturn {
   const [, forceRender] = useState(0);
   const jobsRef = useRef<Map<number, IndexingJob>>(new Map());
   const unlistenRefs = useRef<Array<() => void>>([]);
+  const listenersReadyRef = useRef<Promise<void> | null>(null);
+  const [cancelPending, setCancelPending] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-
-    // Activity log is intentionally not loaded eagerly here to avoid
-    // invoking Tauri commands during many unit tests which can cause
-    // mocked `invoke` call ordering to become flaky. The activity log
-    // is fetched on-demand by the UI when needed.
 
     const setupListeners = async () => {
       const unlistenProgress = await listen<ProgressPayload>('indexing://progress', (event) => {
         if (!mounted) return;
         const p = event.payload;
-        // Remove the synthetic pending job for this root now that a real job has started.
+        console.log('[useIndexing] indexing://progress', p);
         jobsRef.current.delete(PENDING_JOB_ID);
         const existing = jobsRef.current.get(p.jobId);
         jobsRef.current.set(p.jobId, {
@@ -109,36 +108,40 @@ export function useIndexing(): UseIndexingReturn {
 
       const unlistenCancelled = await listen<{ jobId: number; rootId: number }>('indexing://cancelled', (event) => {
         if (!mounted) return;
-        const { jobId } = event.payload;
+        const { jobId, rootId } = event.payload;
+        console.log('[useIndexing] indexing://cancelled', event.payload);
         jobsRef.current.delete(PENDING_JOB_ID);
         const existing = jobsRef.current.get(jobId);
         if (existing) {
           jobsRef.current.set(jobId, { ...existing, isComplete: true, completedAt: Math.floor(Date.now() / 1000) });
+        } else {
+          jobsRef.current.set(jobId, makeCompletedJob(jobId, rootId));
         }
+        setCancelPending(false);
         forceRender((n) => n + 1);
       });
 
       const unlistenCompleted = await listen<CompletedPayload>('indexing://completed', (event) => {
         if (!mounted) return;
         const p = event.payload;
+        console.log('[useIndexing] indexing://completed', p);
         jobsRef.current.delete(PENDING_JOB_ID);
         const existing = jobsRef.current.get(p.jobId);
-        if (existing) {
-          jobsRef.current.set(p.jobId, {
-            ...existing,
-            phase: 'completed',
-            filesTotal: p.filesTotal,
-            filesAdded: p.filesAdded,
-            filesUpdated: p.filesUpdated,
-            filesMoved: p.filesMoved,
-            filesDeleted: p.filesDeleted,
-            errorCount: p.errorCount,
-            progressPercent: 100,
-            isComplete: true,
-            completedAt: Math.floor(Date.now() / 1000),
-          });
-          forceRender((n) => n + 1);
-        }
+        const base = existing ?? makeCompletedJob(p.jobId, p.rootId);
+        jobsRef.current.set(p.jobId, {
+          ...base,
+          phase: 'completed',
+          filesTotal: p.filesTotal,
+          filesAdded: p.filesAdded,
+          filesUpdated: p.filesUpdated,
+          filesMoved: p.filesMoved,
+          filesDeleted: p.filesDeleted,
+          errorCount: p.errorCount,
+          progressPercent: 100,
+          isComplete: true,
+          completedAt: Math.floor(Date.now() / 1000),
+        });
+        forceRender((n) => n + 1);
       });
 
       if (mounted) {
@@ -150,7 +153,7 @@ export function useIndexing(): UseIndexingReturn {
       }
     };
 
-    setupListeners();
+    listenersReadyRef.current = setupListeners();
 
     return () => {
       mounted = false;
@@ -159,8 +162,10 @@ export function useIndexing(): UseIndexingReturn {
   }, []);
 
   const startIndexing = useCallback(async (rootId: number) => {
-    // Immediately inject a synthetic pending job so the UI shows feedback
-    // before the first indexing://progress event arrives from Rust.
+    if (listenersReadyRef.current) {
+      await listenersReadyRef.current;
+    }
+
     jobsRef.current.set(PENDING_JOB_ID, {
       jobId: PENDING_JOB_ID,
       rootId,
@@ -184,20 +189,57 @@ export function useIndexing(): UseIndexingReturn {
     try {
       await apiStartIndexing(rootId);
     } finally {
-      // Remove the sentinel and mark any still-active job for this root as
-      // complete so the hero dismisses on cancellation or error.
       jobsRef.current.delete(PENDING_JOB_ID);
       for (const [id, job] of jobsRef.current) {
         if (job.rootId === rootId && !job.isComplete) {
           jobsRef.current.set(id, { ...job, isComplete: true, completedAt: Math.floor(Date.now() / 1000) });
         }
       }
+      setCancelPending(false);
       forceRender((n) => n + 1);
+    }
+  }, []);
+
+  const cancelIndexing = useCallback(async () => {
+    console.log('[useIndexing] cancelIndexing called');
+    setCancelPending(true);
+    const now = Math.floor(Date.now() / 1000);
+    for (const [id, job] of jobsRef.current) {
+      if (!job.isComplete) {
+        jobsRef.current.set(id, { ...job, isComplete: true, completedAt: now });
+      }
+    }
+    forceRender((n) => n + 1);
+    try {
+      await apiCancelIndexing();
+    } catch (e) {
+      console.error('[useIndexing] cancelIndexing failed', e);
     }
   }, []);
 
   const jobs = Array.from(jobsRef.current.values());
   const activeJob = jobs.find((j) => !j.isComplete) ?? null;
 
-  return { jobs, activeJob, startIndexing };
+  return { jobs, activeJob, startIndexing, cancelIndexing, cancelPending };
+}
+
+function makeCompletedJob(jobId: number, rootId: number): IndexingJob {
+  return {
+    jobId,
+    rootId,
+    phase: 'completed',
+    filesTotal: 0,
+    filesDone: 0,
+    filesAdded: 0,
+    filesUpdated: 0,
+    filesMoved: 0,
+    filesDeleted: 0,
+    errorCount: 0,
+    currentFile: null,
+    extractionTotal: 0,
+    extractionDone: 0,
+    progressPercent: 0,
+    isComplete: true,
+    completedAt: Math.floor(Date.now() / 1000),
+  };
 }

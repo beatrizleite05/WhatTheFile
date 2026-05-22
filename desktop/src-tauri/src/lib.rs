@@ -166,9 +166,14 @@ async fn start_indexing(
     let db_path = state.db_path.clone();
     let ollama_url = state.ollama_url.clone();
     let cancel_flag = state.cancel_flag.clone();
-    cancel_flag.store(false, Ordering::Relaxed);
+    log::info!("[start_indexing] root_id={root_id}");
     tauri::async_runtime::spawn_blocking(move || {
-        indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag).map_err(|e| e.to_string())
+        cancel_flag.store(false, Ordering::Relaxed);
+        log::info!("[start_indexing] cancel flag reset, entering indexer::run");
+        let result = indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag)
+            .map_err(|e| e.to_string());
+        log::info!("[start_indexing] indexer::run returned: {result:?}");
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -176,9 +181,9 @@ async fn start_indexing(
 
 #[tauri::command]
 async fn cancel_indexing(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    log::info!("[cancel_indexing] setting cancel flag");
+    let prev = state.cancel_flag.load(Ordering::Relaxed);
     state.cancel_flag.store(true, Ordering::Relaxed);
-    log::info!("[cancel_indexing] flag is now: {}", state.cancel_flag.load(Ordering::Relaxed));
+    log::info!("[cancel_indexing] flag set: {prev} -> true");
     Ok(())
 }
 

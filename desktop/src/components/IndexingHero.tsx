@@ -1,11 +1,12 @@
 import { motion } from 'framer-motion';
 import { LoaderCircle } from 'lucide-react';
-import { cancelIndexing } from '../api/indexing';
 import type { IndexingJob } from '../hooks/useIndexing';
 import { basename } from '../utils';
 
 interface IndexingHeroProps {
   activeJob: IndexingJob | null;
+  onCancel?: () => void;
+  cancelPending?: boolean;
 }
 
 const PHASE_LABELS: Record<IndexingJob['phase'], string> = {
@@ -29,7 +30,7 @@ function countLabel(job: IndexingJob): string {
   return `${job.filesDone} / ${job.filesTotal} files`;
 }
 
-export function IndexingHero({ activeJob }: IndexingHeroProps) {
+export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHeroProps) {
   if (!activeJob) return null;
 
   const { phase, progressPercent, currentFile } = activeJob;
@@ -108,11 +109,10 @@ export function IndexingHero({ activeJob }: IndexingHeroProps) {
       </span>
       <button
         type="button"
+        disabled={cancelPending || !onCancel}
         onClick={() => {
           console.log('[IndexingHero] cancel clicked');
-          cancelIndexing()
-            .then(() => console.log('[IndexingHero] cancelIndexing resolved'))
-            .catch((e) => console.error('[IndexingHero] cancelIndexing FAILED', e));
+          onCancel?.();
         }}
         style={{
           marginTop: 4,
@@ -123,10 +123,11 @@ export function IndexingHero({ activeJob }: IndexingHeroProps) {
           color: 'var(--text-secondary)',
           fontFamily: 'var(--font-system)',
           fontSize: 'var(--font-size-xs)',
-          cursor: 'pointer',
+          cursor: cancelPending ? 'default' : 'pointer',
+          opacity: cancelPending ? 0.5 : 1,
         }}
       >
-        Cancel
+        {cancelPending ? 'Cancelling…' : 'Cancel'}
       </button>
     </div>
   );
