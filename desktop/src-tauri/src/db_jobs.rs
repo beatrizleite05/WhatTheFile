@@ -50,28 +50,6 @@ pub fn update_job_counts(
     Ok(())
 }
 
-pub fn update_job_progress(
-    conn: &Connection,
-    job_id: i64,
-    counts: &JobCounts,
-    cursor_path: Option<&str>,
-    now: i64,
-) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE index_jobs SET
-           files_total = ?1, files_done = ?2, files_added = ?3,
-           files_updated = ?4, files_moved = ?5, files_deleted = ?6,
-           error_count = ?7, cursor_path = ?8, updated_at = ?9
-         WHERE id = ?10",
-        params![
-            counts.files_total, counts.files_done, counts.files_added,
-            counts.files_updated, counts.files_moved, counts.files_deleted,
-            counts.error_count, cursor_path, now, job_id
-        ],
-    )?;
-    Ok(())
-}
-
 pub fn complete_job(
     conn: &Connection,
     job_id: i64,

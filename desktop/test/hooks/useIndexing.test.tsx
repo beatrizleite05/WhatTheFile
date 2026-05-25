@@ -140,67 +140,6 @@ describe('useIndexing', () => {
     expect(unlisten).toHaveBeenCalled();
   });
 
-  it('exposes currentFile from progress payload', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 5, filesDone: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: 'reports/q1.pdf', extractionTotal: 5, extractionDone: 2 },
-      });
-    });
-
-    expect(result.current.jobs[0].currentFile).toBe('reports/q1.pdf');
-  });
-
-  it('uses extraction sub-counts for progressPercent during extracting phase', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 100, filesDone: 100, filesAdded: 100, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: null, extractionTotal: 4, extractionDone: 1 },
-      });
-    });
-
-    expect(result.current.jobs[0].progressPercent).toBe(25);
-  });
-
-  it('falls back to filesDone/filesTotal when phase is not extracting', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'fingerprinting', filesTotal: 8, filesDone: 2, filesAdded: 0, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: null, extractionTotal: 0, extractionDone: 0 },
-      });
-    });
-
-    expect(result.current.jobs[0].progressPercent).toBe(25);
-  });
-
-  it('preserves currentFile across throttled progress events without it', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 3, filesDone: 3, filesAdded: 3, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: 'notes.md', extractionTotal: 3, extractionDone: 1 },
-      });
-    });
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 3, filesDone: 3, filesAdded: 3, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: null, extractionTotal: 3, extractionDone: 2 },
-      });
-    });
-
-    expect(result.current.jobs[0].currentFile).toBe('notes.md');
-  });
-
   it('startIndexing awaits listener registration before invoking the IPC', async () => {
     let resolveListen: (() => void) | null = null;
     mockListen.mockImplementation(() => {
@@ -252,7 +191,7 @@ describe('useIndexing', () => {
 
     act(() => {
       handlers['indexing://progress']?.({
-        payload: { jobId: 5, rootId: 3, phase: 'extracting', filesTotal: 100, filesDone: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, currentFile: 'foo.pdf', extractionTotal: 10, extractionDone: 1 },
+        payload: { jobId: 5, rootId: 3, phase: 'extracting', filesTotal: 100, filesDone: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 },
       });
     });
     expect(result.current.activeJob).not.toBeNull();

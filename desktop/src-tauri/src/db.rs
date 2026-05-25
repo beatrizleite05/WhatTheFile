@@ -13,8 +13,8 @@ pub use db_roots::{insert_root, find_root_by_path, find_root_by_id, update_root_
 pub use db_files::{find_file_by_path, find_file_by_fingerprint, upsert_file_metadata,
                    stamp_index_marker, move_file, sweep_deleted_files, update_file_content,
                    replace_chunks, find_files_needing_extraction};
-pub use db_jobs::{insert_job, update_job_phase, update_job_counts, update_job_progress,
-                   complete_job, log_activity, list_completed_jobs, CompletedJob};
+pub use db_jobs::{insert_job, update_job_phase, update_job_counts, complete_job, log_activity,
+                   list_completed_jobs, CompletedJob};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

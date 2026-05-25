@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import { LoaderCircle } from 'lucide-react';
 import type { IndexingJob } from '../hooks/useIndexing';
-import { basename } from '../utils';
 
 interface IndexingHeroProps {
   activeJob: IndexingJob | null;
@@ -23,17 +22,10 @@ const PHASE_HINTS: Record<IndexingJob['phase'], string> = {
   completed: 'Your index is up to date.',
 };
 
-function countLabel(job: IndexingJob): string {
-  if (job.phase === 'extracting' && job.extractionTotal > 0) {
-    return `${job.extractionDone} / ${job.extractionTotal} files`;
-  }
-  return `${job.filesDone} / ${job.filesTotal} files`;
-}
-
 export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHeroProps) {
   if (!activeJob) return null;
 
-  const { phase, progressPercent, currentFile } = activeJob;
+  const { phase, filesDone, filesTotal, progressPercent } = activeJob;
 
   return (
     <div
@@ -57,23 +49,6 @@ export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHer
       <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', textAlign: 'center', maxWidth: 360 }}>
         {PHASE_HINTS[phase]}
       </span>
-      {currentFile && (
-        <span
-          data-testid="indexing-hero-current-file"
-          style={{
-            color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--font-size-xs)',
-            maxWidth: 360,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={currentFile}
-        >
-          {basename(currentFile)}
-        </span>
-      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 'min(360px, 80%)' }}>
         <div
           role="progressbar"
@@ -100,7 +75,7 @@ export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHer
           />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
-          <span>{countLabel(activeJob)}</span>
+          <span>{filesDone} / {filesTotal} files</span>
           <span>{progressPercent}%</span>
         </div>
       </div>

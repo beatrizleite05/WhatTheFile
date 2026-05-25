@@ -1,12 +1,9 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 use tauri::Emitter;
 use crate::{chunker, db, errors::AppError, extractor, llm};
-
-const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -103,98 +100,6 @@ fn file_is_in_code_repo(file_path: &Path, root: &Path) -> bool {
     false
 }
 
-struct ProgressEmitter<'a> {
-    job_id: i64,
-    root_id: i64,
-    emit: &'a dyn Fn(&str, &serde_json::Value),
-    last_emit: Instant,
-    extraction_total: i64,
-    extraction_done: i64,
-    last_current_file: Option<String>,
-}
-
-impl<'a> ProgressEmitter<'a> {
-    fn new(job_id: i64, root_id: i64, emit: &'a dyn Fn(&str, &serde_json::Value)) -> Self {
-        Self {
-            job_id,
-            root_id,
-            emit,
-            last_emit: Instant::now() - PROGRESS_EMIT_INTERVAL,
-            extraction_total: 0,
-            extraction_done: 0,
-            last_current_file: None,
-        }
-    }
-
-    fn set_extraction_total(&mut self, total: i64) {
-        self.extraction_total = total;
-        self.extraction_done = 0;
-    }
-
-    fn advance_extraction(&mut self) {
-        self.extraction_done += 1;
-    }
-
-    fn clear_current_file(&mut self) {
-        self.last_current_file = None;
-    }
-
-    fn build_payload(&self, phase: &str, counts: &db::JobCounts) -> serde_json::Value {
-        serde_json::json!({
-            "jobId": self.job_id,
-            "rootId": self.root_id,
-            "phase": phase,
-            "filesTotal": counts.files_total,
-            "filesDone": counts.files_done,
-            "filesAdded": counts.files_added,
-            "filesUpdated": counts.files_updated,
-            "filesMoved": counts.files_moved,
-            "filesDeleted": counts.files_deleted,
-            "errorCount": counts.error_count,
-            "currentFile": self.last_current_file,
-            "extractionTotal": self.extraction_total,
-            "extractionDone": self.extraction_done,
-        })
-    }
-
-    fn emit_now(
-        &mut self,
-        conn: &Connection,
-        phase: &str,
-        counts: &db::JobCounts,
-        current_file: Option<&str>,
-    ) -> Result<(), AppError> {
-        if let Some(path) = current_file {
-            self.last_current_file = Some(path.to_string());
-        }
-        db::update_job_progress(conn, self.job_id, counts, self.last_current_file.as_deref(), db::unix_now())?;
-        log::debug!(
-            "[progress-emit] job={} phase={} total={} done={} extTotal={} extDone={} currentFile={:?}",
-            self.job_id, phase, counts.files_total, counts.files_done,
-            self.extraction_total, self.extraction_done, self.last_current_file,
-        );
-        (self.emit)("indexing://progress", &self.build_payload(phase, counts));
-        self.last_emit = Instant::now();
-        Ok(())
-    }
-
-    fn tick(
-        &mut self,
-        conn: &Connection,
-        phase: &str,
-        counts: &db::JobCounts,
-        current_file: Option<&str>,
-    ) -> Result<(), AppError> {
-        if let Some(path) = current_file {
-            self.last_current_file = Some(path.to_string());
-        }
-        if self.last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
-            self.emit_now(conn, phase, counts, None)?;
-        }
-        Ok(())
-    }
-}
-
 // ── public API ────────────────────────────────────────────────────────────────
 
 pub fn run(
@@ -273,27 +178,46 @@ fn run_scan_inner(
     emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<(), AppError> {
     let mut counts = db::JobCounts::default();
-    let mut progress = ProgressEmitter::new(job_id, root_id, emit);
 
-    progress.emit_now(conn, "discovering", &counts, None)?;
-    let candidates = run_discovery(conn, root_id, root_path, marker, &mut counts, cancel, &mut progress)?;
-    progress.clear_current_file();
-    progress.emit_now(conn, "discovering", &counts, None)?;
+    emit("indexing://progress", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id, "phase": "discovering",
+        "filesTotal": 0, "filesDone": 0, "filesAdded": 0,
+        "filesUpdated": 0, "filesMoved": 0, "filesDeleted": 0,
+    }));
+
+    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, cancel, emit)?;
 
     check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
-    progress.emit_now(conn, "fingerprinting", &counts, None)?;
-    run_fingerprinting(conn, root_id, marker, candidates, &mut counts, cancel, &mut progress)?;
-    progress.clear_current_file();
-    progress.emit_now(conn, "fingerprinting", &counts, None)?;
+    emit("indexing://progress", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
+        "filesTotal": counts.files_total, "filesDone": counts.files_done,
+        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+    }));
+
+    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, cancel, emit)?;
 
     check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
-    progress.emit_now(conn, "extracting", &counts, None)?;
-    run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts, &mut progress)?;
-    progress.emit_now(conn, "extracting", &counts, None)?;
+    emit("indexing://progress", &serde_json::json!({
+        "jobId": job_id, "rootId": root_id, "phase": "extracting",
+        "filesTotal": counts.files_total, "filesDone": counts.files_done,
+        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+    }));
+
+    if let Err(e) = run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts) {
+        if cancel.load(Ordering::Relaxed) {
+            db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
+            emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
+            emit("index://changed", &serde_json::Value::Null);
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        return Err(e);
+    }
 
     let now = db::unix_now();
     counts.files_deleted = db::sweep_deleted_files(conn, root_id, marker, now)?;
@@ -329,14 +253,17 @@ fn check_cancel(cancel: &Arc<AtomicBool>) -> Result<(), AppError> {
     }
 }
 
+/// Walk the filesystem and collect files that need fingerprinting.
+/// Files whose mtime+size are unchanged are stamped and skipped immediately.
 fn run_discovery(
     conn: &Connection,
     root_id: i64,
     root_path: &Path,
     marker: i64,
+    job_id: i64,
     counts: &mut db::JobCounts,
     cancel: &Arc<AtomicBool>,
-    progress: &mut ProgressEmitter<'_>,
+    emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<Vec<FileCandidate>, AppError> {
     let mut candidates: Vec<FileCandidate> = Vec::new();
 
@@ -345,9 +272,11 @@ fn run_discovery(
         .filter_entry(|e| {
             if e.depth() > 0 {
                 if let Some(name) = e.file_name().to_str() {
+                    // Skip hidden entries (files and directories).
                     if name.starts_with('.') {
                         return false;
                     }
+                    // Skip known junk directories entirely — never descend into them.
                     if e.file_type().is_dir() && JUNK_DIRS.contains(&name) {
                         return false;
                     }
@@ -405,13 +334,19 @@ fn run_discovery(
             if existing.mtime_ns == mtime_ns && existing.size_bytes == size_bytes {
                 db::stamp_index_marker(conn, existing.id, marker, db::unix_now())?;
                 counts.files_done += 1;
-                progress.tick(conn, "discovering", counts, Some(&rel_path))?;
+                if counts.files_done % 50 == 0 {
+                    db::update_job_counts(conn, job_id, counts, db::unix_now())?;
+                    emit("indexing://progress", &serde_json::json!({
+                        "jobId": job_id, "rootId": root_id, "phase": "discovering",
+                        "filesTotal": counts.files_total, "filesDone": counts.files_done,
+                        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+                        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+                    }));
+                }
                 continue;
             }
         }
         let previously_existed = existing_record.is_some();
-
-        progress.tick(conn, "discovering", counts, Some(&rel_path))?;
 
         candidates.push(FileCandidate { path, rel_path, filename, media_type, size_bytes, mtime_ns, previously_existed });
     }
@@ -419,14 +354,16 @@ fn run_discovery(
     Ok(candidates)
 }
 
+/// Hash each candidate and upsert/move records as appropriate.
 fn run_fingerprinting(
     conn: &Connection,
     root_id: i64,
     marker: i64,
+    job_id: i64,
     candidates: Vec<FileCandidate>,
     counts: &mut db::JobCounts,
     cancel: &Arc<AtomicBool>,
-    progress: &mut ProgressEmitter<'_>,
+    emit: &dyn Fn(&str, &serde_json::Value),
 ) -> Result<(), AppError> {
     for candidate in candidates {
         if cancel.load(Ordering::Relaxed) {
@@ -445,12 +382,14 @@ fn run_fingerprinting(
                 db::move_file(conn, existing_fp.id, &candidate.rel_path, &candidate.filename, candidate.mtime_ns, marker, now)?;
                 counts.files_moved += 1;
                 counts.files_done += 1;
-                progress.tick(conn, "fingerprinting", counts, Some(&candidate.rel_path))?;
+                if counts.files_done % 50 == 0 {
+                    db::update_job_counts(conn, job_id, counts, now)?;
+                }
                 continue;
             }
+            // Same path, same content (mtime drifted) — stamp so sweep keeps it.
             db::stamp_index_marker(conn, existing_fp.id, marker, now)?;
             counts.files_done += 1;
-            progress.tick(conn, "fingerprinting", counts, Some(&candidate.rel_path))?;
             continue;
         }
 
@@ -463,7 +402,7 @@ fn run_fingerprinting(
             candidate.size_bytes,
             candidate.mtime_ns,
             &fingerprint,
-            "",
+            "", // model_version: filled by extraction phase
             marker,
             now,
         )?;
@@ -474,11 +413,21 @@ fn run_fingerprinting(
             counts.files_added += 1;
         }
         counts.files_done += 1;
-        progress.tick(conn, "fingerprinting", counts, Some(&candidate.rel_path))?;
+
+        if counts.files_done % 50 == 0 {
+            db::update_job_counts(conn, job_id, counts, now)?;
+            emit("indexing://progress", &serde_json::json!({
+                "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
+                "filesTotal": counts.files_total, "filesDone": counts.files_done,
+                "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
+                "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
+            }));
+        }
     }
     Ok(())
 }
 
+/// Extract text and embed chunks for files whose model_version is still empty.
 fn run_extraction(
     conn: &Connection,
     root_id: i64,
@@ -486,23 +435,15 @@ fn run_extraction(
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
     counts: &mut db::JobCounts,
-    progress: &mut ProgressEmitter<'_>,
 ) -> Result<(), AppError> {
     let pending = db::find_files_needing_extraction(conn, root_id)?;
-    let pending_total = pending.len() as i64;
-    log::info!("[indexer] extraction phase: {} files pending", pending_total);
-
-    progress.set_extraction_total(pending_total);
-    progress.emit_now(conn, "extracting", counts, None)?;
-
+    log::info!("[indexer] extraction phase: {} files pending", pending.len());
     for (file_id, rel_path, _media_type) in pending {
         if cancel.load(Ordering::Relaxed) {
             log::info!("[indexer] cancel detected in extraction loop — stopping");
             return Err(AppError::Indexer("cancelled".into()));
         }
         log::info!("[indexer] extracting: {}", rel_path);
-        progress.emit_now(conn, "extracting", counts, Some(&rel_path))?;
-
         let abs_path = root_path.join(&rel_path);
         let now = db::unix_now();
         match extractor::extract(&abs_path, ollama_url, cancel) {
@@ -513,8 +454,6 @@ fn run_extraction(
                 }
                 if result.text.is_empty() {
                     counts.error_count += 1;
-                    progress.advance_extraction();
-                    progress.tick(conn, "extracting", counts, Some(&rel_path))?;
                     continue;
                 }
                 let chunks = chunker::chunk_text(&result.text, chunker::CHUNK_SIZE, chunker::CHUNK_OVERLAP);
@@ -534,6 +473,7 @@ fn run_extraction(
                     .map(|(i, c)| (i, c.text.as_str(), embedding_blobs[i].as_deref()))
                     .collect();
 
+                // Files inside a code repository are ranked lower than standalone documents.
                 let confidence = if file_is_in_code_repo(&abs_path, root_path) {
                     result.confidence * REPO_CONFIDENCE_FACTOR
                 } else {
@@ -546,8 +486,6 @@ fn run_extraction(
                 counts.error_count += 1;
             }
         }
-        progress.advance_extraction();
-        progress.tick(conn, "extracting", counts, Some(&rel_path))?;
     }
     Ok(())
 }

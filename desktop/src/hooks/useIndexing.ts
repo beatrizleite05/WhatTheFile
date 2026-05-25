@@ -13,9 +13,6 @@ export interface IndexingJob {
   filesMoved: number;
   filesDeleted: number;
   errorCount: number;
-  currentFile: string | null;
-  extractionTotal: number;
-  extractionDone: number;
   progressPercent: number;
   isComplete: boolean;
   completedAt: number | null;
@@ -40,9 +37,6 @@ interface ProgressPayload {
   filesMoved: number;
   filesDeleted: number;
   errorCount: number;
-  currentFile: string | null;
-  extractionTotal: number;
-  extractionDone: number;
 }
 
 interface CompletedPayload {
@@ -56,12 +50,9 @@ interface CompletedPayload {
   errorCount: number;
 }
 
-function computePercent(p: ProgressPayload): number {
-  if (p.phase === 'extracting' && p.extractionTotal > 0) {
-    return Math.round((p.extractionDone / p.extractionTotal) * 100);
-  }
-  if (p.filesTotal === 0) return 0;
-  return Math.round((p.filesDone / p.filesTotal) * 100);
+function computePercent(done: number, total: number): number {
+  if (total === 0) return 0;
+  return Math.round((done / total) * 100);
 }
 
 // Synthetic job ID for optimistic "pending" state before Rust emits the first event.
@@ -96,10 +87,7 @@ export function useIndexing(): UseIndexingReturn {
           filesMoved: p.filesMoved,
           filesDeleted: p.filesDeleted,
           errorCount: p.errorCount ?? existing?.errorCount ?? 0,
-          currentFile: p.currentFile ?? existing?.currentFile ?? null,
-          extractionTotal: p.extractionTotal ?? existing?.extractionTotal ?? 0,
-          extractionDone: p.extractionDone ?? existing?.extractionDone ?? 0,
-          progressPercent: computePercent(p),
+          progressPercent: computePercent(p.filesDone, p.filesTotal),
           isComplete: false,
           completedAt: existing?.completedAt ?? null,
         });
@@ -177,9 +165,6 @@ export function useIndexing(): UseIndexingReturn {
       filesMoved: 0,
       filesDeleted: 0,
       errorCount: 0,
-      currentFile: null,
-      extractionTotal: 0,
-      extractionDone: 0,
       progressPercent: 0,
       isComplete: false,
       completedAt: null,
@@ -235,9 +220,6 @@ function makeCompletedJob(jobId: number, rootId: number): IndexingJob {
     filesMoved: 0,
     filesDeleted: 0,
     errorCount: 0,
-    currentFile: null,
-    extractionTotal: 0,
-    extractionDone: 0,
     progressPercent: 0,
     isComplete: true,
     completedAt: Math.floor(Date.now() / 1000),

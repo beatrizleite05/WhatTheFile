@@ -1,11 +1,6 @@
 use super::*;
 use std::io::Write;
-use std::sync::{Arc, atomic::AtomicBool};
 use tempfile::NamedTempFile;
-
-fn cancel_flag() -> Arc<AtomicBool> {
-    Arc::new(AtomicBool::new(false))
-}
 
 fn write_tmp(ext: &str, content: &[u8]) -> NamedTempFile {
     let mut f = tempfile::Builder::new()
@@ -21,7 +16,7 @@ fn write_tmp(ext: &str, content: &[u8]) -> NamedTempFile {
 #[test]
 fn test_extract_txt_returns_content() {
     let f = write_tmp("txt", b"Hello, world!");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert_eq!(result.text, "Hello, world!");
     assert!((result.confidence - 1.0).abs() < 1e-6);
 }
@@ -29,7 +24,7 @@ fn test_extract_txt_returns_content() {
 #[test]
 fn test_extract_txt_trims_whitespace() {
     let f = write_tmp("txt", b"  \n  hello  \n  ");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert_eq!(result.text, "hello");
 }
 
@@ -38,7 +33,7 @@ fn test_extract_txt_trims_whitespace() {
 #[test]
 fn test_extract_md_strips_heading() {
     let f = write_tmp("md", b"# Title\n\nSome text.");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("Title"), "heading text should be preserved");
     assert!(!result.text.contains('#'), "# markers should be removed");
 }
@@ -46,7 +41,7 @@ fn test_extract_md_strips_heading() {
 #[test]
 fn test_extract_md_strips_bold_and_italic() {
     let f = write_tmp("md", b"**bold** and *italic* text");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("bold"), "bold text preserved");
     assert!(result.text.contains("italic"), "italic text preserved");
     assert!(!result.text.contains('*'), "asterisks should be removed");
@@ -55,7 +50,7 @@ fn test_extract_md_strips_bold_and_italic() {
 #[test]
 fn test_extract_md_strips_inline_code() {
     let f = write_tmp("md", b"Use `code` here");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("code"));
     assert!(!result.text.contains('`'));
 }
@@ -63,7 +58,7 @@ fn test_extract_md_strips_inline_code() {
 #[test]
 fn test_extract_md_strips_link() {
     let f = write_tmp("md", b"See [example](https://example.com) for details");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("example"), "link text preserved");
     assert!(!result.text.contains("https://"), "URL removed");
 }
@@ -71,7 +66,7 @@ fn test_extract_md_strips_link() {
 #[test]
 fn test_extract_md_strips_blockquote() {
     let f = write_tmp("md", b"> quoted text");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("quoted text"));
     assert!(!result.text.contains('>'));
 }
@@ -81,7 +76,7 @@ fn test_extract_md_strips_blockquote() {
 #[test]
 fn test_extract_csv_formats_as_key_value() {
     let f = write_tmp("csv", b"name,age,city\nAlice,30,Berlin\nBob,25,Paris");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.contains("name: Alice"), "got: {}", result.text);
     assert!(result.text.contains("age: 30"));
     assert!(result.text.contains("city: Berlin"));
@@ -91,14 +86,14 @@ fn test_extract_csv_formats_as_key_value() {
 #[test]
 fn test_extract_csv_empty_file_returns_empty() {
     let f = write_tmp("csv", b"");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.is_empty());
 }
 
 #[test]
 fn test_extract_csv_header_only_returns_empty() {
     let f = write_tmp("csv", b"name,age,city\n");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(f.path(), "http://localhost:11434").unwrap();
     assert!(result.text.is_empty());
 }
 
@@ -107,7 +102,7 @@ fn test_extract_csv_header_only_returns_empty() {
 #[test]
 fn test_extract_unsupported_extension_errors() {
     let f = write_tmp("bin", b"\x00\x01\x02");
-    let result = extract(f.path(), "http://localhost:11434", &cancel_flag());
+    let result = extract(f.path(), "http://localhost:11434");
     assert!(
         matches!(result, Err(crate::errors::AppError::Extractor(_))),
         "expected Extractor error for .bin file"
@@ -129,7 +124,7 @@ fn fixtures() -> std::path::PathBuf {
 #[test]
 fn test_extract_pdf_text_layer_returns_content() {
     let path = fixtures().join("LinearProgramming-FEUP.pdf");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "expected text from digital PDF");
     assert!((result.confidence - 1.0).abs() < 1e-6);
 }
@@ -139,7 +134,7 @@ fn test_extract_pdf_text_layer_multiple_files() {
     let files = ["GreedyAlgorithms.pdf", "IntegerLinearProgramming.pdf", "drylab.pdf"];
     for name in files {
         let path = fixtures().join(name);
-        let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+        let result = extract(&path, "http://localhost:11434").unwrap();
         assert!(!result.text.is_empty(), "{name} should have extractable text");
     }
 }
@@ -149,7 +144,7 @@ fn test_extract_pdf_text_layer_multiple_files() {
 #[test]
 fn test_extract_xls_returns_text() {
     let path = fixtures().join("file_example_XLS_50.xls");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "expected text from XLS file");
     assert!((result.confidence - 1.0).abs() < 1e-6);
 }
@@ -157,7 +152,7 @@ fn test_extract_xls_returns_text() {
 #[test]
 fn test_extract_xls_larger_file() {
     let path = fixtures().join("file_example_XLS_1000.xls");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty());
 }
 
@@ -166,7 +161,7 @@ fn test_extract_xls_larger_file() {
 #[test]
 fn test_extract_xlsm_returns_text() {
     let path = fixtures().join("Exemplos_Folha_de_Calculo_101_A.xlsm");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "expected text from XLSM file");
     assert!((result.confidence - 1.0).abs() < 1e-6);
 }
@@ -177,7 +172,7 @@ fn test_extract_xlsm_returns_text() {
 fn test_extract_webp_routes_to_image_extractor() {
     let path = fixtures().join("An-example-of-scanned-receipt-from-SROIE-3-dataset.webp");
     // Port 19999 has nothing listening — triggers a connection error, not "unsupported file type".
-    match extract(&path, "http://127.0.0.1:19999", &cancel_flag()) {
+    match extract(&path, "http://127.0.0.1:19999") {
         Err(crate::errors::AppError::Extractor(msg)) => {
             assert!(!msg.contains("unsupported file type"),
                 "webp must be routed to image extractor, not rejected: {msg}");
@@ -218,7 +213,7 @@ fn test_ocr_lang_constant_contains_eng_and_por() {
 #[ignore = "requires pdfium library; Naac_appLetter.pdf is a scanned PDF — exercises the OCR path"]
 fn test_extract_pdf_scanned_via_ocr() {
     let path = fixtures().join("Naac_appLetter.pdf");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "scanned PDF should produce OCR text");
     assert!(result.confidence > 0.0 && result.confidence <= 1.0);
 }
@@ -229,7 +224,7 @@ fn test_extract_pdf_scanned_via_ocr() {
 #[ignore = "requires Ollama running with qwen2.5vl:7b or llava:7b"]
 fn test_extract_image_png_returns_description() {
     let path = fixtures().join("16626587.png");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "vision model should describe the image");
 }
 
@@ -237,7 +232,7 @@ fn test_extract_image_png_returns_description() {
 #[ignore = "requires Ollama running with qwen2.5vl:7b or llava:7b"]
 fn test_extract_image_jpg_returns_description() {
     let path = fixtures().join("images.jpg");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "vision model should describe the image");
 }
 
@@ -245,7 +240,7 @@ fn test_extract_image_jpg_returns_description() {
 #[ignore = "requires pdfium + Ollama; exercises OCR→vision fallback path for a scanned PDF"]
 fn test_extract_pdf_scanned_ocr_then_vision_fallback() {
     let path = fixtures().join("Naac_appLetter.pdf");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "should produce output via OCR or vision");
 }
 
@@ -254,7 +249,7 @@ fn test_extract_pdf_scanned_ocr_then_vision_fallback() {
 #[test]
 fn test_extract_docx_returns_text() {
     let path = fixtures().join("Guia de Montagem Indústria 4.0.docx");
-    let result = extract(&path, "http://localhost:11434", &cancel_flag()).unwrap();
+    let result = extract(&path, "http://localhost:11434").unwrap();
     assert!(!result.text.is_empty(), "expected text from DOCX file");
     assert!((result.confidence - 1.0).abs() < 1e-6);
 }
