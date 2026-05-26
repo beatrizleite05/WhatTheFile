@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearch } from './hooks/useSearch';
-import { useIndexing } from './hooks/useIndexing';
+import { useIndexing, IndexingProvider } from './hooks/useIndexing';
 import { useSettings } from './hooks/useSettings';
 import { useOllamaStatus } from './hooks/useOllamaStatus';
 import { OnboardingFlow } from './components/OnboardingFlow';
@@ -9,7 +9,7 @@ import { SettingsView } from './components/SettingsView';
 
 type View = 'main' | 'settings';
 
-export default function App() {
+function AppInner() {
   const indexing = useIndexing();
   const settings = useSettings(indexing.startIndexing);
   const ollamaStatus = useOllamaStatus();
@@ -23,7 +23,6 @@ export default function App() {
     () => localStorage.getItem('wtf:skippedOnboarding') === 'true'
   );
 
-  // Allow SettingsView to trigger onboarding reset within the same window
   useEffect(() => {
     function handleStorageReset(e: StorageEvent) {
       if (e.key === 'wtf:onboarded' && e.newValue === null) {
@@ -78,5 +77,13 @@ export default function App() {
       showSkipWarning={skippedOnboarding && settings.roots.length === 0}
       onOpenSettings={() => setView('settings')}
     />
+  );
+}
+
+export default function App() {
+  return (
+    <IndexingProvider>
+      <AppInner />
+    </IndexingProvider>
   );
 }

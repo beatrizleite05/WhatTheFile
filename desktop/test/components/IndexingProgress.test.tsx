@@ -7,6 +7,7 @@ const job: IndexingJob = {
   jobId: 1, rootId: 10, phase: 'extracting',
   filesTotal: 200, filesDone: 80, filesAdded: 30, filesUpdated: 5,
   filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 40, isComplete: false, completedAt: null,
+  currentFile: null, extractionTotal: 0, extractionDone: 0,
 };
 
 describe('IndexingProgress', () => {
