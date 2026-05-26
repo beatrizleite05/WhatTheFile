@@ -145,14 +145,23 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("add_root: {e}"))?;
 
         eprintln!("eval: indexing corpus at {} (root_id={}) ...", corpus_abs.display(), root.id);
-        indexer::run_scan(
-            &conn,
-            root.id,
-            &corpus_abs,
-            &args.ollama_url,
-            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            &|_event, _payload| { /* no-op */ },
-        ).map_err(|e| format!("indexer::run_scan: {e}"))?;
+        {
+            use whatthefile_lib::indexer_progress::{ProgressReporter, ProgressSender, ProgressEvent};
+            struct NoOpSender;
+            impl ProgressSender for NoOpSender {
+                fn send(&self, _: ProgressEvent) {}
+            }
+            let reporter = ProgressReporter::new(NoOpSender, 0, root.id);
+            indexer::run_scan(
+                &conn,
+                root.id,
+                &corpus_abs,
+                &args.ollama_url,
+                &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                &|_event, _payload| { /* no-op */ },
+                reporter,
+            ).map_err(|e| format!("indexer::run_scan: {e}"))?;
+        }
         eprintln!("eval: indexing complete");
     }
 

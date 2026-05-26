@@ -4,15 +4,12 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use walkdir::WalkDir;
 use tauri::Emitter;
 use crate::{chunker, db, errors::AppError, extractor, llm};
+use crate::indexer_progress::{Phase, ProgressReporter};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-// Configurable policy (allowedExtensions, excludeGlobs, maxFileSizeBytes, includeHidden) is
-// hardcoded here pending DB schema + Rust implementation. The intended contract is specified
-// in src/core/policy.ts and enforced by the tests in test/policy.spec.ts.
 const MAX_FILE_SIZE_BYTES: i64 = 100 * 1024 * 1024; // 100 MB
 
-// Directories whose contents are never useful to index. Matched by directory name only.
 const JUNK_DIRS: &[&str] = &[
     "node_modules", ".git", ".svn", ".hg",
     "dist", "build", "out", "target", "coverage",
@@ -22,8 +19,6 @@ const JUNK_DIRS: &[&str] = &[
     ".eggs", ".pytest_cache", ".mypy_cache",
 ];
 
-// Presence of any of these files/dirs in a directory marks it as a code repository root.
-// Files within any ancestor that is a code repo receive a reduced confidence score.
 const REPO_MARKERS: &[&str] = &[
     ".git", "package.json", "Cargo.toml", "go.mod",
     "pyproject.toml", "setup.py", "composer.json",
@@ -31,8 +26,6 @@ const REPO_MARKERS: &[&str] = &[
     "Makefile", "CMakeLists.txt",
 ];
 
-// Confidence multiplier applied to files found inside a code repository tree.
-// A README.md in a repo still appears in results but ranks below standalone documents.
 const REPO_CONFIDENCE_FACTOR: f32 = 0.5;
 
 fn detect_media_type(filename: &str) -> Option<&'static str> {
@@ -74,13 +67,10 @@ struct FileCandidate {
     previously_existed: bool,
 }
 
-/// Returns true if `dir` contains any file or directory that is a repo marker.
 fn is_repo_root(dir: &Path) -> bool {
     REPO_MARKERS.iter().any(|marker| dir.join(marker).exists())
 }
 
-/// Walks ancestors of `file_path` up to (but not including) `root` and returns
-/// true if any ancestor directory contains a repo marker.
 fn file_is_in_code_repo(file_path: &Path, root: &Path) -> bool {
     let mut dir = file_path.parent().unwrap_or(root);
     loop {
@@ -90,9 +80,7 @@ fn file_is_in_code_repo(file_path: &Path, root: &Path) -> bool {
         if dir == root || dir.parent().is_none() {
             break;
         }
-        // Unwrap is safe: we checked parent().is_none() above.
         dir = dir.parent().unwrap();
-        // Stop if we've gone above the root.
         if !dir.starts_with(root) {
             break;
         }
@@ -108,6 +96,7 @@ pub fn run(
     root_id: i64,
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
+    on_progress: tauri::ipc::Channel<crate::indexer_progress::ProgressEvent>,
 ) -> Result<i64, AppError> {
     let conn = db::open_and_migrate(db_path)?;
     let root = db::find_root_by_id(&conn, root_id)?
@@ -115,9 +104,15 @@ pub fn run(
     let root_path = PathBuf::from(&root.path);
     db::clear_root_index(&conn, root_id)?;
     let app = app.clone();
-    run_scan(&conn, root_id, &root_path, ollama_url, cancel, &|event, payload| {
+    let emit = move |event: &str, payload: &serde_json::Value| {
         let _ = app.emit(event, payload);
-    })
+    };
+    let reporter = ProgressReporter::new(
+        crate::indexer_progress::ChannelSender(on_progress),
+        0, // job_id filled in run_scan after insert
+        root_id,
+    );
+    run_scan(&conn, root_id, &root_path, ollama_url, cancel, &emit, reporter)
 }
 
 // ── internal (testable) ───────────────────────────────────────────────────────
@@ -129,6 +124,7 @@ pub fn run_scan(
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
     emit: &dyn Fn(&str, &serde_json::Value),
+    mut reporter: ProgressReporter,
 ) -> Result<i64, AppError> {
     db::recover_interrupted_jobs(conn)?;
 
@@ -140,17 +136,24 @@ pub fn run_scan(
     let job_id = db::insert_job(conn, root_id, marker, now)?;
     db::log_activity(conn, "job_started", Some(root_id), None, Some(job_id), None, now)?;
 
-    log::info!("[run_scan] job={job_id} root={root_id} starting");
-    match run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit) {
+    // Patch reporter with the real job_id now that we have it.
+    reporter.set_job_id(job_id);
+
+    log::info!("[indexer:job={job_id}] root={root_id} starting");
+
+    let counts_default = db::JobCounts::default();
+    reporter.force(Phase::Discovering, &counts_default);
+
+    match run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit, &mut reporter) {
         Ok(()) => {
-            log::info!("[run_scan] job={job_id} completed");
+            log::info!("[indexer:job={job_id}] completed");
             Ok(job_id)
         }
         Err(e) => {
             let cancelled = cancel.load(Ordering::Relaxed) || is_cancelled_error(&e);
             let final_phase = if cancelled { "cancelled" } else { "interrupted" };
             log::warn!(
-                "[run_scan] job={job_id} ended in error path: cancelled={cancelled} final_phase={final_phase} err={e:?}"
+                "[indexer:job={job_id}] ended in error: cancelled={cancelled} final_phase={final_phase} err={e:?}"
             );
             let now = db::unix_now();
             let _ = db::update_job_phase(conn, job_id, final_phase, now);
@@ -176,40 +179,30 @@ fn run_scan_inner(
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
     emit: &dyn Fn(&str, &serde_json::Value),
+    reporter: &mut ProgressReporter,
 ) -> Result<(), AppError> {
     let mut counts = db::JobCounts::default();
 
-    emit("indexing://progress", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id, "phase": "discovering",
-        "filesTotal": 0, "filesDone": 0, "filesAdded": 0,
-        "filesUpdated": 0, "filesMoved": 0, "filesDeleted": 0,
-    }));
-
-    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, cancel, emit)?;
+    let candidates = run_discovery(conn, root_id, root_path, marker, job_id, &mut counts, cancel, reporter)?;
 
     check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "fingerprinting", db::unix_now())?;
-    emit("indexing://progress", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
-        "filesTotal": counts.files_total, "filesDone": counts.files_done,
-        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-    }));
+    reporter.force(Phase::Fingerprinting, &counts);
 
-    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, cancel, emit)?;
+    run_fingerprinting(conn, root_id, marker, job_id, candidates, &mut counts, cancel, reporter)?;
 
     check_cancel(cancel)?;
 
     db::update_job_phase(conn, job_id, "extracting", db::unix_now())?;
-    emit("indexing://progress", &serde_json::json!({
-        "jobId": job_id, "rootId": root_id, "phase": "extracting",
-        "filesTotal": counts.files_total, "filesDone": counts.files_done,
-        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-    }));
+    // Count pending files before the first emit so extraction_total is correct from the start.
+    let pending_count = db::find_files_needing_extraction(conn, root_id)
+        .map(|v| v.len() as i64)
+        .unwrap_or(0);
+    reporter.set_extraction_total(pending_count);
+    reporter.force(Phase::Extracting, &counts);
 
-    if let Err(e) = run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts) {
+    if let Err(e) = run_extraction(conn, root_id, root_path, ollama_url, cancel, &mut counts, reporter) {
         if cancel.load(Ordering::Relaxed) {
             db::update_job_phase(conn, job_id, "cancelled", db::unix_now())?;
             emit("indexing://cancelled", &serde_json::json!({ "jobId": job_id, "rootId": root_id }));
@@ -237,9 +230,10 @@ fn run_scan_inner(
     }));
     emit("index://changed", &serde_json::Value::Null);
 
+    log::info!("[indexer:job={job_id}] embedding model unload");
     match llm::runtime::unload_model("nomic-embed-text-v2-moe", ollama_url) {
-        Ok(()) => log::info!("unloaded embedding model (nomic-embed-text-v2-moe)"),
-        Err(e) => log::warn!("unload embedding model failed (will remain in VRAM): {e}"),
+        Ok(()) => log::info!("[indexer:job={job_id}] unloaded embedding model"),
+        Err(e) => log::warn!("[indexer:job={job_id}] unload embedding model failed: {e}"),
     }
 
     Ok(())
@@ -253,8 +247,6 @@ fn check_cancel(cancel: &Arc<AtomicBool>) -> Result<(), AppError> {
     }
 }
 
-/// Walk the filesystem and collect files that need fingerprinting.
-/// Files whose mtime+size are unchanged are stamped and skipped immediately.
 fn run_discovery(
     conn: &Connection,
     root_id: i64,
@@ -263,7 +255,7 @@ fn run_discovery(
     job_id: i64,
     counts: &mut db::JobCounts,
     cancel: &Arc<AtomicBool>,
-    emit: &dyn Fn(&str, &serde_json::Value),
+    reporter: &mut ProgressReporter,
 ) -> Result<Vec<FileCandidate>, AppError> {
     let mut candidates: Vec<FileCandidate> = Vec::new();
 
@@ -272,11 +264,9 @@ fn run_discovery(
         .filter_entry(|e| {
             if e.depth() > 0 {
                 if let Some(name) = e.file_name().to_str() {
-                    // Skip hidden entries (files and directories).
                     if name.starts_with('.') {
                         return false;
                     }
-                    // Skip known junk directories entirely — never descend into them.
                     if e.file_type().is_dir() && JUNK_DIRS.contains(&name) {
                         return false;
                     }
@@ -287,7 +277,7 @@ fn run_discovery(
         .filter_map(|e| e.ok())
     {
         if cancel.load(Ordering::Relaxed) {
-            log::info!("[indexer] cancel detected in discovery loop — stopping");
+            log::info!("[indexer:job={}] cancel detected in discovery loop", reporter.job_id());
             return Err(AppError::Indexer("cancelled".into()));
         }
 
@@ -334,15 +324,8 @@ fn run_discovery(
             if existing.mtime_ns == mtime_ns && existing.size_bytes == size_bytes {
                 db::stamp_index_marker(conn, existing.id, marker, db::unix_now())?;
                 counts.files_done += 1;
-                if counts.files_done % 50 == 0 {
-                    db::update_job_counts(conn, job_id, counts, db::unix_now())?;
-                    emit("indexing://progress", &serde_json::json!({
-                        "jobId": job_id, "rootId": root_id, "phase": "discovering",
-                        "filesTotal": counts.files_total, "filesDone": counts.files_done,
-                        "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-                        "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-                    }));
-                }
+                db::update_job_counts(conn, job_id, counts, db::unix_now())?;
+                reporter.tick(Phase::Discovering, counts, None);
                 continue;
             }
         }
@@ -354,7 +337,6 @@ fn run_discovery(
     Ok(candidates)
 }
 
-/// Hash each candidate and upsert/move records as appropriate.
 fn run_fingerprinting(
     conn: &Connection,
     root_id: i64,
@@ -363,11 +345,11 @@ fn run_fingerprinting(
     candidates: Vec<FileCandidate>,
     counts: &mut db::JobCounts,
     cancel: &Arc<AtomicBool>,
-    emit: &dyn Fn(&str, &serde_json::Value),
+    reporter: &mut ProgressReporter,
 ) -> Result<(), AppError> {
     for candidate in candidates {
         if cancel.load(Ordering::Relaxed) {
-            log::info!("[indexer] cancel detected in fingerprinting loop — stopping");
+            log::info!("[indexer:job={}] cancel detected in fingerprinting loop", reporter.job_id());
             return Err(AppError::Indexer("cancelled".into()));
         }
         let bytes = match std::fs::read(&candidate.path) {
@@ -382,14 +364,13 @@ fn run_fingerprinting(
                 db::move_file(conn, existing_fp.id, &candidate.rel_path, &candidate.filename, candidate.mtime_ns, marker, now)?;
                 counts.files_moved += 1;
                 counts.files_done += 1;
-                if counts.files_done % 50 == 0 {
-                    db::update_job_counts(conn, job_id, counts, now)?;
-                }
+                db::update_job_counts(conn, job_id, counts, now)?;
+                reporter.tick(Phase::Fingerprinting, counts, None);
                 continue;
             }
-            // Same path, same content (mtime drifted) — stamp so sweep keeps it.
             db::stamp_index_marker(conn, existing_fp.id, marker, now)?;
             counts.files_done += 1;
+            reporter.tick(Phase::Fingerprinting, counts, None);
             continue;
         }
 
@@ -402,7 +383,7 @@ fn run_fingerprinting(
             candidate.size_bytes,
             candidate.mtime_ns,
             &fingerprint,
-            "", // model_version: filled by extraction phase
+            "",
             marker,
             now,
         )?;
@@ -413,21 +394,12 @@ fn run_fingerprinting(
             counts.files_added += 1;
         }
         counts.files_done += 1;
-
-        if counts.files_done % 50 == 0 {
-            db::update_job_counts(conn, job_id, counts, now)?;
-            emit("indexing://progress", &serde_json::json!({
-                "jobId": job_id, "rootId": root_id, "phase": "fingerprinting",
-                "filesTotal": counts.files_total, "filesDone": counts.files_done,
-                "filesAdded": counts.files_added, "filesUpdated": counts.files_updated,
-                "filesMoved": counts.files_moved, "filesDeleted": counts.files_deleted,
-            }));
-        }
+        db::update_job_counts(conn, job_id, counts, now)?;
+        reporter.tick(Phase::Fingerprinting, counts, None);
     }
     Ok(())
 }
 
-/// Extract text and embed chunks for files whose model_version is still empty.
 fn run_extraction(
     conn: &Connection,
     root_id: i64,
@@ -435,32 +407,47 @@ fn run_extraction(
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
     counts: &mut db::JobCounts,
+    reporter: &mut ProgressReporter,
 ) -> Result<(), AppError> {
     let pending = db::find_files_needing_extraction(conn, root_id)?;
-    log::info!("[indexer] extraction phase: {} files pending", pending.len());
+    let job_id = reporter.job_id();
+    log::info!("[indexer:job={job_id}] extraction phase: {} files pending", pending.len());
+
     for (file_id, rel_path, _media_type) in pending {
         if cancel.load(Ordering::Relaxed) {
-            log::info!("[indexer] cancel detected in extraction loop — stopping");
+            log::info!("[indexer:job={job_id}] cancel detected in extraction loop — stopping");
             return Err(AppError::Indexer("cancelled".into()));
         }
-        log::info!("[indexer] extracting: {}", rel_path);
+
+        // Emit pre-extraction tick so the current filename is visible immediately.
+        reporter.tick(Phase::Extracting, counts, Some(&rel_path));
+
+        log::info!("[indexer:job={job_id}] extracting: {}", rel_path);
         let abs_path = root_path.join(&rel_path);
         let now = db::unix_now();
         match extractor::extract(&abs_path, ollama_url, cancel) {
             Ok(result) => {
                 if cancel.load(Ordering::Relaxed) {
-                    log::info!("[indexer] cancel detected after extraction — stopping");
+                    log::info!("[indexer:job={job_id}] cancel detected after extraction — stopping");
                     return Err(AppError::Indexer("cancelled".into()));
                 }
                 if result.text.is_empty() {
                     counts.error_count += 1;
+                    reporter.advance_extraction();
+                    reporter.tick(Phase::Extracting, counts, None);
                     continue;
                 }
                 let chunks = chunker::chunk_text(&result.text, chunker::CHUNK_SIZE, chunker::CHUNK_OVERLAP);
                 let chunk_texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+                log::info!(
+                    "[indexer:job={job_id}] embedding {} chunks for {} (first chunk source: {})",
+                    chunks.len(),
+                    rel_path,
+                    chunks.first().map(|c| c.text.chars().take(40).collect::<String>()).unwrap_or_default(),
+                );
                 let embeddings_result = llm::embeddings::embed_texts(&chunk_texts, ollama_url, cancel);
                 if cancel.load(Ordering::Relaxed) {
-                    log::info!("[indexer] cancel detected after embedding — stopping");
+                    log::info!("[indexer:job={job_id}] cancel detected after embedding — stopping");
                     return Err(AppError::Indexer("cancelled".into()));
                 }
                 let embedding_blobs: Vec<Option<Vec<u8>>> = match embeddings_result {
@@ -473,7 +460,6 @@ fn run_extraction(
                     .map(|(i, c)| (i, c.text.as_str(), embedding_blobs[i].as_deref()))
                     .collect();
 
-                // Files inside a code repository are ranked lower than standalone documents.
                 let confidence = if file_is_in_code_repo(&abs_path, root_path) {
                     result.confidence * REPO_CONFIDENCE_FACTOR
                 } else {
@@ -486,6 +472,10 @@ fn run_extraction(
                 counts.error_count += 1;
             }
         }
+
+        reporter.advance_extraction();
+        reporter.tick(Phase::Extracting, counts, None);
+        log::debug!("[indexer:job={job_id}] extraction done: {}", rel_path);
     }
     Ok(())
 }

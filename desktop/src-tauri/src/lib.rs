@@ -4,6 +4,7 @@ pub mod errors;
 pub mod extractor;
 pub mod chunker;
 pub mod indexer;
+pub mod indexer_progress;
 pub mod llm;
 pub mod platform;
 #[path = "search.rs"]
@@ -162,6 +163,7 @@ async fn start_indexing(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     root_id: i64,
+    on_progress: tauri::ipc::Channel<indexer_progress::ProgressEvent>,
 ) -> Result<i64, String> {
     let db_path = state.db_path.clone();
     let ollama_url = state.ollama_url.clone();
@@ -170,7 +172,7 @@ async fn start_indexing(
     tauri::async_runtime::spawn_blocking(move || {
         cancel_flag.store(false, Ordering::Relaxed);
         log::info!("[start_indexing] cancel flag reset, entering indexer::run");
-        let result = indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag)
+        let result = indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag, on_progress)
             .map_err(|e| e.to_string());
         log::info!("[start_indexing] indexer::run returned: {result:?}");
         result
