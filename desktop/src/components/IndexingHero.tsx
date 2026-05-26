@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { LoaderCircle } from 'lucide-react';
+import { basename } from '../utils';
 import type { IndexingJob } from '../hooks/useIndexing';
 
 interface IndexingHeroProps {
@@ -25,7 +26,12 @@ const PHASE_HINTS: Record<IndexingJob['phase'], string> = {
 export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHeroProps) {
   if (!activeJob) return null;
 
-  const { phase, filesDone, filesTotal, progressPercent } = activeJob;
+  const { phase, filesDone, filesTotal, progressPercent, currentFile, extractionDone, extractionTotal } = activeJob;
+
+  const isExtracting = phase === 'extracting';
+  const countDone = isExtracting && extractionTotal > 0 ? extractionDone : filesDone;
+  const countTotal = isExtracting && extractionTotal > 0 ? extractionTotal : filesTotal;
+  const currentFileBasename = currentFile ? basename(currentFile) : null;
 
   return (
     <div
@@ -49,6 +55,22 @@ export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHer
       <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', textAlign: 'center', maxWidth: 360 }}>
         {PHASE_HINTS[phase]}
       </span>
+      {currentFileBasename && (
+        <span
+          data-testid="indexing-current-file"
+          style={{
+            color: 'var(--text-tertiary)',
+            fontSize: 'var(--font-size-xs)',
+            fontFamily: 'var(--font-mono)',
+            maxWidth: 340,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {currentFileBasename}
+        </span>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: 'min(360px, 80%)' }}>
         <div
           role="progressbar"
@@ -75,7 +97,7 @@ export function IndexingHero({ activeJob, onCancel, cancelPending }: IndexingHer
           />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
-          <span>{filesDone} / {filesTotal} files</span>
+          <span>{countDone} / {countTotal} files</span>
           <span>{progressPercent}%</span>
         </div>
       </div>
