@@ -6,6 +6,7 @@ const PRIMARY_MODEL: &str = "moondream:1.8b";
 const FALLBACK_MODEL: &str = "qwen2.5vl:7b";
 const PROMPT: &str = "Describe this image in detail, focusing on any text, objects, and context visible.";
 const VISION_TIMEOUT_SECS: u64 = 180;
+const VISION_HTTP_READ_TIMEOUT_SECS: u64 = 300;
 const KEEP_ALIVE: &str = "10m";
 
 /// Call the Ollama vision model to produce a text description of an image.
@@ -65,6 +66,20 @@ fn call_ollama_bounded(base_url: &str, model: &str, image_b64: &str, cancel: &Ar
 }
 
 fn call_ollama(base_url: &str, model: &str, image_b64: &str) -> Result<String, AppError> {
+    call_ollama_with_read_timeout(
+        base_url,
+        model,
+        image_b64,
+        std::time::Duration::from_secs(VISION_HTTP_READ_TIMEOUT_SECS),
+    )
+}
+
+fn call_ollama_with_read_timeout(
+    base_url: &str,
+    model: &str,
+    image_b64: &str,
+    read_timeout: std::time::Duration,
+) -> Result<String, AppError> {
     let url = format!("{base_url}/api/generate");
     let body = serde_json::json!({
         "model": model,
@@ -76,6 +91,7 @@ fn call_ollama(base_url: &str, model: &str, image_b64: &str) -> Result<String, A
 
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(read_timeout)
         .build();
     let response = agent
         .post(&url)
@@ -122,7 +138,30 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires Ollama running with qwen2.5vl:7b or llava:7b"]
+    fn test_call_ollama_read_timeout_fires_when_server_hangs() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let _accept_thread = std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                std::thread::sleep(Duration::from_secs(60));
+                drop(stream);
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{port}");
+        let started = Instant::now();
+        let result = call_ollama_with_read_timeout(&url, "test", "ZHVtbXk=", Duration::from_secs(2));
+        let elapsed = started.elapsed();
+
+        assert!(matches!(result, Err(AppError::Llm(_))), "expected Llm error, got: {result:?}");
+        assert!(elapsed < Duration::from_secs(5), "read_timeout not enforced; took {elapsed:?}");
+    }
+
+    #[test]
+    #[ignore = "requires Ollama running with moondream:1.8b or qwen2.5vl:7b"]
     fn test_describe_image_live() {
         let img_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../test/sample-files/16626587.png");
