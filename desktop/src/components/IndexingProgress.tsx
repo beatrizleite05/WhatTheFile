@@ -16,7 +16,10 @@ const PHASE_LABELS: Record<IndexingJob['phase'], string> = {
 export function IndexingProgress({ activeJob, rootLabel }: IndexingProgressProps) {
   if (!activeJob) return null;
 
-  const { phase, filesDone, filesTotal, progressPercent } = activeJob;
+  const { phase, filesDone, filesTotal, progressPercent, extractionDone, extractionTotal } = activeJob;
+  const isExtracting = phase === 'extracting';
+  const countDone = isExtracting && extractionTotal > 0 ? extractionDone : filesDone;
+  const countTotal = isExtracting && extractionTotal > 0 ? extractionTotal : filesTotal;
 
   return (
     <div style={{
@@ -31,7 +34,7 @@ export function IndexingProgress({ activeJob, rootLabel }: IndexingProgressProps
           {PHASE_LABELS[phase]}{rootLabel ? ` — ${rootLabel}` : ''}
         </span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
-          {filesDone} / {filesTotal}
+          {countDone} / {countTotal}
         </span>
       </div>
       <div

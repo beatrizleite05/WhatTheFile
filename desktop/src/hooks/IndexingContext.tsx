@@ -43,6 +43,17 @@ function computePercent(done: number, total: number): number {
   return Math.round((done / total) * 100);
 }
 
+// During extraction, the phase-specific counter is what should drive the progress bar —
+// `filesDone/filesTotal` stays at 7/7 from the prior fingerprinting phase. Earlier phases
+// share the same counter so falling back to it is correct.
+function computePhasePercent(s: ProgressSnapshot): number {
+  if (s.isComplete) return 100;
+  if (s.phase === 'extracting' && s.extractionTotal > 0) {
+    return computePercent(s.extractionDone, s.extractionTotal);
+  }
+  return computePercent(s.filesDone, s.filesTotal);
+}
+
 const PENDING_JOB_ID = -1;
 const POLL_INTERVAL_MS = 200;
 
@@ -58,7 +69,7 @@ function snapshotToJob(s: ProgressSnapshot, existing?: IndexingJob): IndexingJob
     filesMoved: s.filesMoved,
     filesDeleted: s.filesDeleted,
     errorCount: s.errorCount,
-    progressPercent: s.isComplete ? 100 : computePercent(s.filesDone, s.filesTotal),
+    progressPercent: computePhasePercent(s),
     isComplete: s.isComplete,
     completedAt: s.isComplete ? Math.floor(Date.now() / 1000) : existing?.completedAt ?? null,
     currentFile: s.currentFile,
