@@ -102,12 +102,17 @@ fn call_ollama(base_url: &str, model: &str, image_b64: &str) -> Result<String, A
 mod tests {
     use super::*;
 
+    fn no_cancel() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     #[test]
     fn test_describe_image_ollama_unreachable() {
         // Point at a port where nothing is listening.
         let result = describe_image(
             "src/llm/vision.rs", // any readable file works for the read step
             "http://127.0.0.1:19999",
+            &no_cancel(),
         );
         assert!(
             matches!(result, Err(AppError::Llm(_))),
@@ -120,7 +125,7 @@ mod tests {
     fn test_describe_image_live() {
         let img_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../test/sample-files/16626587.png");
-        let desc = describe_image(img_path.to_str().unwrap(), "http://localhost:11434")
+        let desc = describe_image(img_path.to_str().unwrap(), "http://localhost:11434", &no_cancel())
             .expect("live Ollama call should succeed");
         assert!(!desc.is_empty(), "description must not be empty");
     }

@@ -1,133 +1,152 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { listen } from '@tauri-apps/api/event';
-import { useIndexing } from '../../src/hooks/useIndexing';
+import type { ReactNode } from 'react';
+import { useIndexing, IndexingProvider } from '../../src/hooks/useIndexing';
+import {
+  startIndexing as apiStartIndexing,
+  cancelIndexing as apiCancelIndexing,
+  getIndexingProgress as apiGetIndexingProgress,
+  getActivityLog as apiGetActivityLog,
+  type ProgressSnapshot,
+} from '../../src/api/indexing';
 
-const mockListen = vi.mocked(listen);
+vi.mock('../../src/api/indexing', () => ({
+  startIndexing: vi.fn().mockResolvedValue(undefined),
+  cancelIndexing: vi.fn().mockResolvedValue(undefined),
+  getIndexingProgress: vi.fn().mockResolvedValue(null),
+  getActivityLog: vi.fn().mockResolvedValue([]),
+}));
 
-type EventHandler = (e: { payload: unknown }) => void;
+const mockStart = vi.mocked(apiStartIndexing);
+const mockCancel = vi.mocked(apiCancelIndexing);
+const mockGetProgress = vi.mocked(apiGetIndexingProgress);
+const mockGetActivity = vi.mocked(apiGetActivityLog);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
-  mockListen.mockResolvedValue(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-function captureHandlers(): Record<string, EventHandler> {
-  const handlers: Record<string, EventHandler> = {};
-  mockListen.mockImplementation((event, handler) => {
-    handlers[event as string] = handler as EventHandler;
-    return Promise.resolve(() => {});
-  });
-  return handlers;
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <IndexingProvider>{children}</IndexingProvider>
+);
+
+function snap(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
+  return {
+    jobId: 42,
+    rootId: 1,
+    seq: 1,
+    phase: 'discovering',
+    filesTotal: 0,
+    filesDone: 0,
+    filesAdded: 0,
+    filesUpdated: 0,
+    filesMoved: 0,
+    filesDeleted: 0,
+    errorCount: 0,
+    currentFile: null,
+    extractionTotal: 0,
+    extractionDone: 0,
+    isComplete: false,
+    ...overrides,
+  };
 }
 
-describe('useIndexing', () => {
+describe('useIndexing (polling provider)', () => {
   it('starts with empty jobs and null activeJob', () => {
-    const { result } = renderHook(() => useIndexing());
+    const { result } = renderHook(() => useIndexing(), { wrapper });
     expect(result.current.jobs).toEqual([]);
     expect(result.current.activeJob).toBeNull();
   });
 
-  it('creates a job when indexing://progress fires', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({
-        payload: { jobId: 1, rootId: 10, phase: 'discovering', filesTotal: 100, filesDone: 20, filesAdded: 5, filesUpdated: 3, filesMoved: 0, filesDeleted: 0, errorCount: 0 },
-      });
-    });
-
-    expect(result.current.jobs).toHaveLength(1);
-    expect(result.current.jobs[0].jobId).toBe(1);
-    expect(result.current.jobs[0].phase).toBe('discovering');
-    expect(result.current.jobs[0].filesDone).toBe(20);
+  it('shows pending placeholder immediately on startIndexing', async () => {
+    mockGetProgress.mockResolvedValue(null);
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await act(async () => { await result.current.startIndexing(1); });
+    expect(result.current.activeJob).not.toBeNull();
+    expect(result.current.activeJob?.rootId).toBe(1);
+    expect(result.current.activeJob?.filesTotal).toBe(0);
   });
 
-  it('updates existing job on duplicate progress (no duplicate entries)', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 1, rootId: 10, phase: 'discovering', filesTotal: 100, filesDone: 20, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 100, filesDone: 60, filesAdded: 5, filesUpdated: 10, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-
-    expect(result.current.jobs).toHaveLength(1);
-    expect(result.current.jobs[0].filesDone).toBe(60);
-    expect(result.current.jobs[0].phase).toBe('extracting');
+  it('upserts the real job from a poll snapshot', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValue(snap({ jobId: 99, filesTotal: 10, filesDone: 3, phase: 'fingerprinting' }));
+    await act(async () => { await result.current.startIndexing(1); });
+    // First pollOnce runs synchronously inside startPolling; await its microtask.
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.jobId).toBe(99);
+    expect(result.current.activeJob?.filesTotal).toBe(10);
+    expect(result.current.activeJob?.filesDone).toBe(3);
+    expect(result.current.activeJob?.phase).toBe('fingerprinting');
   });
 
-  it('marks job completed when indexing://completed fires', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
+  it('drops stale snapshots with seq <= last seen', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 5, filesDone: 5 }));
+    await act(async () => { await result.current.startIndexing(1); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.filesDone).toBe(5);
 
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 50, filesDone: 50, filesAdded: 10, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-    act(() => {
-      handlers['indexing://completed']?.({ payload: { jobId: 1, rootId: 10, filesTotal: 50, filesAdded: 10, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 3, filesDone: 99 })); // stale
+    await act(async () => { vi.advanceTimersByTime(250); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.filesDone).toBe(5);
+  });
 
+  it('marks job complete and stops polling when snapshot.isComplete=true', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 1, filesDone: 5, filesTotal: 5, isComplete: true }));
+    mockGetActivity.mockResolvedValue([
+      { jobId: 42, rootId: 1, filesTotal: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, completedAt: 1700000000 },
+    ]);
+
+    await act(async () => { await result.current.startIndexing(1); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.activeJob).toBeNull();
     expect(result.current.jobs[0].isComplete).toBe(true);
     expect(result.current.jobs[0].phase).toBe('completed');
+    expect(result.current.jobs[0].filesAdded).toBe(5);
+    expect(result.current.jobs[0].completedAt).toBe(1700000000);
+
+    const callsBefore = mockGetProgress.mock.calls.length;
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mockGetProgress.mock.calls.length).toBe(callsBefore);
+  });
+
+  it('cancel marks all active jobs complete and calls the cancel command', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await act(async () => { await result.current.startIndexing(1); });
+    expect(result.current.activeJob).not.toBeNull();
+
+    await act(async () => { await result.current.cancelIndexing(); });
+    expect(result.current.activeJob).toBeNull();
+    expect(mockCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('startIndexing throws and clears placeholder if backend invoke fails', async () => {
+    mockStart.mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await expect(
+      act(async () => { await result.current.startIndexing(1); })
+    ).rejects.toThrow('boom');
     expect(result.current.activeJob).toBeNull();
   });
 
-  it('computes progressPercent as filesDone / filesTotal * 100', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
+  it('progressPercent computes from done/total, 0 when total is 0', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 1, filesDone: 3, filesTotal: 10 }));
+    await act(async () => { await result.current.startIndexing(1); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.progressPercent).toBe(30);
 
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 1, rootId: 10, phase: 'extracting', filesTotal: 200, filesDone: 50, filesAdded: 0, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-
-    expect(result.current.jobs[0].progressPercent).toBe(25);
-  });
-
-  it('progressPercent is 0 when filesTotal is 0', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 1, rootId: 10, phase: 'discovering', filesTotal: 0, filesDone: 0, filesAdded: 0, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-
-    expect(result.current.jobs[0].progressPercent).toBe(0);
-  });
-
-  it('activeJob is the most recent non-completed job', async () => {
-    const handlers = captureHandlers();
-    const { result } = renderHook(() => useIndexing());
-    await act(async () => {});
-
-    act(() => {
-      handlers['indexing://progress']?.({ payload: { jobId: 2, rootId: 20, phase: 'discovering', filesTotal: 10, filesDone: 0, filesAdded: 0, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 } });
-    });
-
-    expect(result.current.activeJob?.jobId).toBe(2);
-  });
-
-  it('calls unlisten on unmount', async () => {
-    const unlisten = vi.fn();
-    mockListen.mockResolvedValue(unlisten);
-
-    const { unmount } = renderHook(() => useIndexing());
-    await act(async () => {});
-    unmount();
-
-    expect(unlisten).toHaveBeenCalled();
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 2, filesDone: 0, filesTotal: 0 }));
+    await act(async () => { vi.advanceTimersByTime(250); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.progressPercent).toBe(0);
   });
 });

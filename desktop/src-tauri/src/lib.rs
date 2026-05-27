@@ -4,6 +4,7 @@ pub mod errors;
 pub mod extractor;
 pub mod chunker;
 pub mod indexer;
+pub mod indexer_progress;
 pub mod llm;
 pub mod platform;
 #[path = "search.rs"]
@@ -32,6 +33,7 @@ pub struct AppState {
     pub db_path: PathBuf,
     pub ollama_url: String,
     pub cancel_flag: Arc<AtomicBool>,
+    pub progress_store: indexer_progress::ProgressStore,
 }
 
 pub fn run() {
@@ -62,12 +64,15 @@ pub fn run() {
             let app_data = app.path().app_data_dir()?;
             std::fs::create_dir_all(app_data.join("db"))?;
             let db_path = app_data.join("db").join("index.sqlite");
-            db::open_and_migrate(&db_path)?;
+            let conn = db::open_and_migrate(&db_path)?;
+            db::recover_interrupted_jobs(&conn)?;
+            drop(conn);
             let ollama_url = llm::runtime::OLLAMA_BASE_URL.to_string();
             app.manage(AppState {
                 db_path,
                 ollama_url: ollama_url.clone(),
                 cancel_flag: Arc::new(AtomicBool::new(false)),
+                progress_store: indexer_progress::new_store(),
             });
             std::thread::spawn(move || {
                 let _ = llm::runtime::release_stale_models(&ollama_url);
@@ -87,6 +92,7 @@ pub fn run() {
             parse_query,
             get_activity_log,
             cancel_indexing,
+            get_indexing_progress,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -134,7 +140,7 @@ async fn remove_root(
         Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     let _ = app.emit("index://changed", ());
     Ok(())
 }
@@ -150,33 +156,68 @@ async fn delete_index(
         db::clear_index(&conn).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     let _ = app.emit("index://changed", ());
     Ok(())
 }
 
+/// Starts indexing on a fresh OS thread and returns immediately.
+///
+/// Frontend polls `get_indexing_progress` for live progress. We don't use a
+/// `tauri::ipc::Channel` or `app.emit`-based push because the patched tao/wry
+/// crates required to boot on macOS 26 break the event loop's UserEvent dispatch,
+/// silently dropping every Rust→JS push. JS→Rust invokes still work, so we poll.
 #[tauri::command]
 async fn start_indexing(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     root_id: i64,
-) -> Result<i64, String> {
+) -> Result<(), String> {
     let db_path = state.db_path.clone();
     let ollama_url = state.ollama_url.clone();
     let cancel_flag = state.cancel_flag.clone();
-    cancel_flag.store(false, Ordering::Relaxed);
-    tauri::async_runtime::spawn_blocking(move || {
-        indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let progress_store = state.progress_store.clone();
+    log::info!("[start_indexing] root_id={root_id}");
+    // Reset snapshot to a fresh "starting" state so polling picks up immediately.
+    *progress_store.lock().unwrap() = Some(indexer_progress::ProgressSnapshot {
+        job_id: 0,
+        root_id,
+        seq: 0,
+        phase: indexer_progress::Phase::Discovering,
+        files_total: 0,
+        files_done: 0,
+        files_added: 0,
+        files_updated: 0,
+        files_moved: 0,
+        files_deleted: 0,
+        error_count: 0,
+        current_file: None,
+        extraction_total: 0,
+        extraction_done: 0,
+        is_complete: false,
+    });
+    std::thread::spawn(move || {
+        cancel_flag.store(false, Ordering::Relaxed);
+        let result = indexer::run(&app, &db_path, root_id, &ollama_url, &cancel_flag, progress_store)
+            .map_err(|e| e.to_string());
+        log::info!("[start_indexing] indexer::run returned: {result:?}");
+    });
+    Ok(())
+}
+
+/// Frontend polls this to drive the indexing hero UI.
+#[tauri::command]
+fn get_indexing_progress(
+    state: tauri::State<'_, AppState>,
+) -> Option<indexer_progress::ProgressSnapshot> {
+    state.progress_store.lock().unwrap().clone()
 }
 
 #[tauri::command]
 async fn cancel_indexing(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    log::info!("[cancel_indexing] setting cancel flag");
+    let prev = state.cancel_flag.load(Ordering::Relaxed);
     state.cancel_flag.store(true, Ordering::Relaxed);
-    log::info!("[cancel_indexing] flag is now: {}", state.cancel_flag.load(Ordering::Relaxed));
+    log::info!("[cancel_indexing] flag set: {prev} -> true");
     Ok(())
 }
 

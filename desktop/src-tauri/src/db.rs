@@ -146,7 +146,6 @@ CREATE TABLE IF NOT EXISTS index_jobs (
   files_moved   INTEGER NOT NULL DEFAULT 0,
   files_deleted INTEGER NOT NULL DEFAULT 0,
   error_count   INTEGER NOT NULL DEFAULT 0,
-  cursor_path   TEXT,
   started_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL,
   completed_at  INTEGER

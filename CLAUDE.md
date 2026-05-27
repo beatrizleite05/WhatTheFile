@@ -67,10 +67,13 @@ The Rust backend owns score blending (RRF: `1/(60+rank_fts) + 1/(60+rank_vec)`).
 
 ### IPC Contract (Tauri)
 
-Frontend calls Rust via `invoke()` for commands; push updates arrive as events (no polling). All timestamps are unix seconds. Wire format is `camelCase` — Rust uses `#[serde(rename_all = "camelCase")]`. Errors surface as human-readable strings.
+Frontend calls Rust via `invoke()` for commands. All timestamps are unix seconds. Wire format is `camelCase` — Rust uses `#[serde(rename_all = "camelCase")]`. Errors surface as human-readable strings.
 
-Key commands: `search`, `start_indexing`, `add_root`, `open_file`, `get_runtime_status`.
-Key events: `indexing://progress`, `indexing://completed`, `index://changed` (triggers re-query on frontend).
+Key commands: `search`, `start_indexing`, `get_indexing_progress`, `cancel_indexing`, `add_root`, `open_file`, `get_runtime_status`, `get_activity_log`.
+
+**Indexing progress is polled, not pushed.** `IndexingProvider` polls `get_indexing_progress` every 200ms while a job is active; the snapshot's `isComplete` field tells it to stop. The patched `tao`/`wry` crates required to boot on macOS 26 (see `desktop/src-tauri/patches/` and `desktop/src-tauri/Cargo.toml`) leave the tao event loop unable to dispatch `WebviewMessage::EvaluateScript` user events, which silently breaks every Rust→JS push path (`tauri::ipc::Channel`, `app.emit`, `webview.eval`). JS→Rust invokes still work, so we poll. Revert to push transport once upstream fixes the macOS 26 issue (tao-apps/tao#1171).
+
+Key events still emitted (best-effort, may not reach JS on macOS 26): `indexing://completed`, `indexing://cancelled`, `index://changed`.
 
 ## Conventions
 
@@ -100,3 +103,17 @@ Layout orchestrator only. Feature state and handlers go in `src/hooks/`. New too
 2. No `.unwrap()` in new Rust code
 3. No TypeScript errors in strict mode (`npx tsc --noEmit`)
 4. Every new acceptance criterion is covered by at least one test
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in the `beatrizleite05/WhatTheFile` repo on GitHub (uses the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical names: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

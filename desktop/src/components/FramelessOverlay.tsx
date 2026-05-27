@@ -140,7 +140,11 @@ export function FramelessOverlay({ search, indexing, ollamaStatus, showSkipWarni
           style={{ display: 'flex', flex: previewResult ? 3 : 1, minWidth: 0 }}
         >
           {search.query.length === 0 && indexing.activeJob ? (
-            <IndexingHero activeJob={indexing.activeJob} />
+            <IndexingHero
+              activeJob={indexing.activeJob}
+              onCancel={indexing.cancelIndexing}
+              cancelPending={indexing.cancelPending}
+            />
           ) : (
             <ResultGrid
               ref={gridRef}

@@ -16,7 +16,7 @@ const makeSearch = (overrides: Partial<UseSearchReturn> = {}): UseSearchReturn =
 });
 
 const makeIndexing = (overrides: Partial<UseIndexingReturn> = {}): UseIndexingReturn => ({
-  jobs: [], activeJob: null, startIndexing: vi.fn(), ...overrides,
+  jobs: [], activeJob: null, startIndexing: vi.fn(), cancelIndexing: vi.fn(), cancelPending: false, ...overrides,
 });
 
 const makeOllama = (overrides: Partial<UseOllamaStatusReturn> = {}): UseOllamaStatusReturn => ({
@@ -88,6 +88,7 @@ describe('FramelessOverlay', () => {
       jobId: 1, rootId: 1, phase: 'extracting',
       filesTotal: 100, filesDone: 50, filesAdded: 20, filesUpdated: 0,
       filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 50, isComplete: false, completedAt: null,
+      currentFile: null, extractionTotal: 0, extractionDone: 0,
     };
     render(<FramelessOverlay search={makeSearch()} indexing={makeIndexing({ activeJob })} ollamaStatus={makeOllama()} onOpenSettings={noop} />);
     expect(screen.getAllByRole('progressbar').length).toBeGreaterThan(0);
@@ -98,6 +99,7 @@ describe('FramelessOverlay', () => {
       jobId: 1, rootId: 1, phase: 'discovering',
       filesTotal: 0, filesDone: 0, filesAdded: 0, filesUpdated: 0,
       filesMoved: 0, filesDeleted: 0, errorCount: 0, progressPercent: 0, isComplete: false, completedAt: null,
+      currentFile: null, extractionTotal: 0, extractionDone: 0,
     };
     render(<FramelessOverlay search={makeSearch({ query: '' })} indexing={makeIndexing({ activeJob })} ollamaStatus={makeOllama()} onOpenSettings={noop} />);
     expect(screen.getByTestId('indexing-hero')).toBeInTheDocument();
