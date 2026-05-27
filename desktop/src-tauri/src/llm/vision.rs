@@ -2,16 +2,16 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use crate::errors::AppError;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 
-const PRIMARY_MODEL: &str = "qwen2.5vl:7b";
-const FALLBACK_MODEL: &str = "llava:7b";
+const PRIMARY_MODEL: &str = "moondream:1.8b";
+const FALLBACK_MODEL: &str = "qwen2.5vl:7b";
 const PROMPT: &str = "Describe this image in detail, focusing on any text, objects, and context visible.";
-// 180s covers cold-start model loading (~60-90s) plus inference time.
 const VISION_TIMEOUT_SECS: u64 = 180;
+const KEEP_ALIVE: &str = "10m";
 
 /// Call the Ollama vision model to produce a text description of an image.
 ///
-/// Tries `qwen2.5vl:7b` first; falls back to `llava:7b` if the primary model
-/// is not available (Ollama returns a 404-style "model not found" error).
+/// Tries `moondream:1.8b` first; falls back to `qwen2.5vl:7b` if the primary
+/// model is not available (Ollama returns a 404-style "model not found" error).
 ///
 /// `ollama_base_url` — e.g. `"http://localhost:11434"`.
 pub fn describe_image(image_path: &str, ollama_base_url: &str, cancel: &Arc<AtomicBool>) -> Result<String, AppError> {
@@ -70,7 +70,8 @@ fn call_ollama(base_url: &str, model: &str, image_b64: &str) -> Result<String, A
         "model": model,
         "prompt": PROMPT,
         "images": [image_b64],
-        "stream": false
+        "stream": false,
+        "keep_alive": KEEP_ALIVE,
     });
 
     let agent = ureq::AgentBuilder::new()
