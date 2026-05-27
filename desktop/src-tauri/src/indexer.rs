@@ -96,7 +96,7 @@ pub fn run(
     root_id: i64,
     ollama_url: &str,
     cancel: &Arc<AtomicBool>,
-    on_progress: tauri::ipc::Channel<crate::indexer_progress::ProgressEvent>,
+    progress_store: crate::indexer_progress::ProgressStore,
 ) -> Result<i64, AppError> {
     let conn = db::open_and_migrate(db_path)?;
     let root = db::find_root_by_id(&conn, root_id)?
@@ -108,7 +108,7 @@ pub fn run(
         let _ = app.emit(event, payload);
     };
     let reporter = ProgressReporter::new(
-        crate::indexer_progress::ChannelSender(on_progress),
+        crate::indexer_progress::StoreSink(progress_store),
         0, // job_id filled in run_scan after insert
         root_id,
     );
@@ -144,7 +144,11 @@ pub fn run_scan(
     let counts_default = db::JobCounts::default();
     reporter.force(Phase::Discovering, &counts_default);
 
-    match run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit, &mut reporter) {
+    let result = run_scan_inner(conn, job_id, root_id, root_path, marker, ollama_url, cancel, emit, &mut reporter);
+    // Always mark the snapshot complete so the frontend stops polling. Authoritative
+    // final counts come from `indexing://completed` (success) or `get_activity_log` (after).
+    reporter.finish_with_last();
+    match result {
         Ok(()) => {
             log::info!("[indexer:job={job_id}] completed");
             Ok(job_id)

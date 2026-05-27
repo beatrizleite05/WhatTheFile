@@ -1,5 +1,5 @@
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::ipc::Channel;
 
 /// Phases that map 1-to-1 with the frontend `IndexingJob.phase` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -10,13 +10,18 @@ pub enum Phase {
     Extracting,
 }
 
-/// One tick payload delivered to the frontend via the IPC channel.
+/// Snapshot of the latest progress tick. Read by the frontend via `get_indexing_progress`.
+///
+/// Why a snapshot+polling transport instead of `tauri::ipc::Channel`:
+/// the patched tao/wry crates needed to boot on macOS 26 (see `patches/`) leave the
+/// tao event loop unable to dispatch `WebviewMessage::EvaluateScript` user events.
+/// That breaks every Rust→JS push path (Channel, app.emit, webview.eval) silently.
+/// JS→Rust invokes still work, so we expose a poll command instead.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProgressEvent {
+pub struct ProgressSnapshot {
     pub job_id: i64,
     pub root_id: i64,
-    /// Monotonic sequence number — frontend drops frames where seq <= last seen seq.
     pub seq: u64,
     pub phase: Phase,
     pub files_total: i64,
@@ -28,24 +33,39 @@ pub struct ProgressEvent {
     pub error_count: i64,
     /// Relative path of the file currently being extracted (None outside extraction phase).
     pub current_file: Option<String>,
-    /// Total files that need extraction (set at extraction-phase start).
     pub extraction_total: i64,
-    /// Files whose extraction has finished (advances per-file).
     pub extraction_done: i64,
+    /// True once the job has finished (success or cancel) so the frontend can stop polling.
+    pub is_complete: bool,
 }
 
-// ── trait so tests can inject a fake sender ────────────────────────────────────
+/// Shared handle. The Tauri command writes here; the polling command reads from here.
+pub type ProgressStore = Arc<Mutex<Option<ProgressSnapshot>>>;
 
-pub trait ProgressSender: Send + 'static {
-    fn send(&self, event: ProgressEvent);
+pub fn new_store() -> ProgressStore {
+    Arc::new(Mutex::new(None))
 }
 
-/// Production sender — wraps `tauri::ipc::Channel<ProgressEvent>`.
-pub struct ChannelSender(pub Channel<ProgressEvent>);
+// ── trait so tests can inject a fake sink ─────────────────────────────────────
 
-impl ProgressSender for ChannelSender {
-    fn send(&self, event: ProgressEvent) {
-        let _ = self.0.send(event);
+pub trait ProgressSink: Send + 'static {
+    fn write(&self, snapshot: ProgressSnapshot);
+    /// Mark the last snapshot complete in-place (preserves all counts/file).
+    /// Used at job end so the frontend stops polling without losing final counts.
+    fn mark_complete(&self);
+}
+
+/// Production sink — writes into the shared `ProgressStore`.
+pub struct StoreSink(pub ProgressStore);
+
+impl ProgressSink for StoreSink {
+    fn write(&self, snapshot: ProgressSnapshot) {
+        *self.0.lock().unwrap() = Some(snapshot);
+    }
+    fn mark_complete(&self) {
+        if let Some(s) = self.0.lock().unwrap().as_mut() {
+            s.is_complete = true;
+        }
     }
 }
 
@@ -54,7 +74,7 @@ impl ProgressSender for ChannelSender {
 const DEFAULT_THROTTLE: Duration = Duration::from_millis(150);
 
 pub struct ProgressReporter {
-    sender: Box<dyn ProgressSender>,
+    sink: Box<dyn ProgressSink>,
     job_id: i64,
     root_id: i64,
     seq: u64,
@@ -65,9 +85,9 @@ pub struct ProgressReporter {
 }
 
 impl ProgressReporter {
-    pub fn new(sender: impl ProgressSender, job_id: i64, root_id: i64) -> Self {
+    pub fn new(sink: impl ProgressSink, job_id: i64, root_id: i64) -> Self {
         Self {
-            sender: Box::new(sender),
+            sink: Box::new(sink),
             job_id,
             root_id,
             seq: 0,
@@ -86,18 +106,16 @@ impl ProgressReporter {
         self.job_id = job_id;
     }
 
-    /// Set total number of files that need extraction (call at extraction-phase start).
     pub fn set_extraction_total(&mut self, total: i64) {
         self.extraction_total = total;
         self.extraction_done = 0;
     }
 
-    /// Increment the extraction-done counter (call after each file completes).
     pub fn advance_extraction(&mut self) {
         self.extraction_done += 1;
     }
 
-    /// Throttled emit — fires only if the throttle interval has elapsed.
+    /// Throttled write — fires only if the throttle interval has elapsed.
     pub fn tick(
         &mut self,
         phase: Phase,
@@ -105,27 +123,30 @@ impl ProgressReporter {
         current_file: Option<&str>,
     ) {
         if self.last_sent.elapsed() >= self.throttle {
-            self.emit(phase, counts, current_file);
+            self.write(phase, counts, current_file, false);
         }
     }
 
-    /// Unconditional emit — use at phase transitions and job start.
-    pub fn force(
-        &mut self,
-        phase: Phase,
-        counts: &crate::db::JobCounts,
-    ) {
-        self.emit(phase, counts, None);
+    /// Unconditional write — use at phase transitions and job start.
+    pub fn force(&mut self, phase: Phase, counts: &crate::db::JobCounts) {
+        self.write(phase, counts, None, false);
     }
 
-    fn emit(
+    /// Mark the last snapshot complete in-place. Use at job exit so the frontend
+    /// stops polling. Preserves the most recent counts/phase/file.
+    pub fn finish_with_last(&mut self) {
+        self.sink.mark_complete();
+    }
+
+    fn write(
         &mut self,
         phase: Phase,
         counts: &crate::db::JobCounts,
         current_file: Option<&str>,
+        is_complete: bool,
     ) {
         self.seq += 1;
-        let event = ProgressEvent {
+        let snapshot = ProgressSnapshot {
             job_id: self.job_id,
             root_id: self.root_id,
             seq: self.seq,
@@ -140,8 +161,9 @@ impl ProgressReporter {
             current_file: current_file.map(|s| s.to_string()),
             extraction_total: self.extraction_total,
             extraction_done: self.extraction_done,
+            is_complete,
         };
-        self.sender.send(event);
+        self.sink.write(snapshot);
         self.last_sent = Instant::now();
     }
 }
@@ -151,25 +173,28 @@ impl ProgressReporter {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
-    /// Fake sender that captures every `ProgressEvent` for test assertions.
+    /// Fake sink that captures every snapshot for test assertions.
     #[derive(Clone, Default)]
-    pub struct CaptureSender(pub Arc<Mutex<Vec<ProgressEvent>>>);
+    pub struct CaptureSink(pub Arc<Mutex<Vec<ProgressSnapshot>>>);
 
-    impl ProgressSender for CaptureSender {
-        fn send(&self, event: ProgressEvent) {
-            self.0.lock().unwrap().push(event);
+    impl ProgressSink for CaptureSink {
+        fn write(&self, snapshot: ProgressSnapshot) {
+            self.0.lock().unwrap().push(snapshot);
+        }
+        fn mark_complete(&self) {
+            if let Some(last) = self.0.lock().unwrap().last_mut() {
+                last.is_complete = true;
+            }
         }
     }
 
-    /// Build a `ProgressReporter` with zero throttle so every `tick` fires.
     pub fn no_throttle_reporter(
-        sender: CaptureSender,
+        sink: CaptureSink,
         job_id: i64,
         root_id: i64,
     ) -> ProgressReporter {
-        let mut r = ProgressReporter::new(sender, job_id, root_id);
+        let mut r = ProgressReporter::new(sink, job_id, root_id);
         r.throttle = Duration::ZERO;
         r
     }

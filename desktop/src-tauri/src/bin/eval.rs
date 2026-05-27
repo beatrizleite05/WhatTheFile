@@ -146,12 +146,13 @@ fn run() -> Result<(), String> {
 
         eprintln!("eval: indexing corpus at {} (root_id={}) ...", corpus_abs.display(), root.id);
         {
-            use whatthefile_lib::indexer_progress::{ProgressReporter, ProgressSender, ProgressEvent};
-            struct NoOpSender;
-            impl ProgressSender for NoOpSender {
-                fn send(&self, _: ProgressEvent) {}
+            use whatthefile_lib::indexer_progress::{ProgressReporter, ProgressSink, ProgressSnapshot};
+            struct NoOpSink;
+            impl ProgressSink for NoOpSink {
+                fn write(&self, _: ProgressSnapshot) {}
+                fn mark_complete(&self) {}
             }
-            let reporter = ProgressReporter::new(NoOpSender, 0, root.id);
+            let reporter = ProgressReporter::new(NoOpSink, 0, root.id);
             indexer::run_scan(
                 &conn,
                 root.id,

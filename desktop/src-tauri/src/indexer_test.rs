@@ -1,5 +1,5 @@
 use super::*;
-use crate::indexer_progress::{Phase, test_helpers::{CaptureSender, no_throttle_reporter}};
+use crate::indexer_progress::{Phase, test_helpers::{CaptureSink, no_throttle_reporter}};
 use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::{Arc, atomic::AtomicBool};
@@ -20,7 +20,7 @@ fn no_emit(_: &str, _: &serde_json::Value) {}
 fn no_cancel() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
 
 fn scan(conn: &Connection, root_id: i64, root_dir: &std::path::Path) -> Result<i64, crate::errors::AppError> {
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let reporter = no_throttle_reporter(capture, 0, root_id);
     run_scan(conn, root_id, root_dir, "http://localhost:11434", &no_cancel(), &no_emit, reporter)
 }
@@ -393,7 +393,7 @@ fn test_progress_stream_has_event_per_phase() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     run_scan(&conn, root.id, &root_dir, "http://localhost:19999", &no_cancel(), &no_emit, reporter).unwrap();
@@ -419,7 +419,7 @@ fn test_progress_stream_sequence_numbers_are_strictly_increasing() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     run_scan(&conn, root.id, &root_dir, "http://localhost:19999", &no_cancel(), &no_emit, reporter).unwrap();
@@ -443,7 +443,7 @@ fn test_progress_stream_extraction_events_carry_current_file() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     // Port 19999 is guaranteed unreachable — embeddings will fail but extraction proceeds.
@@ -482,7 +482,7 @@ fn test_progress_stream_extraction_total_populated_before_extraction() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     run_scan(&conn, root.id, &root_dir, "http://localhost:19999", &no_cancel(), &no_emit, reporter).unwrap();
@@ -511,7 +511,7 @@ fn test_progress_stream_small_folder_still_produces_events() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     run_scan(&conn, root.id, &root_dir, "http://localhost:19999", &no_cancel(), &no_emit, reporter).unwrap();
@@ -534,7 +534,7 @@ fn test_progress_stream_final_event_has_correct_counts() {
 
     let root = db::insert_root(&conn, root_dir.to_str().unwrap()).unwrap();
 
-    let capture = CaptureSender::default();
+    let capture = CaptureSink::default();
     let events_ref = capture.0.clone();
     let reporter = no_throttle_reporter(capture, 0, root.id);
     run_scan(&conn, root.id, &root_dir, "http://localhost:19999", &no_cancel(), &no_emit, reporter).unwrap();

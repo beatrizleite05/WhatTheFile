@@ -24,6 +24,7 @@
     "allow-parse-query",
     "allow-cancel-indexing",
     "allow-get-activity-log",
+    "allow-get-indexing-progress",
     "dialog:allow-open"
   ]
 }
