@@ -92,6 +92,7 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
     let mut total_conf_count = 0u32;
 
     let tessdata = crate::platform::tessdata_dir();
+    let total_pages = doc.pages().len();
 
     for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -103,21 +104,26 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
 
         let rgba = bitmap.as_image().into_rgba8();
 
-        match run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS) {
+        let started = std::time::Instant::now();
+        let outcome = run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS);
+        let elapsed_ms = started.elapsed().as_millis();
+
+        match outcome {
             Ok((text, conf)) if conf >= OCR_CONFIDENCE_THRESHOLD && !text.trim().is_empty() => {
+                log::info!("OCR page {}/{} of {}: ok conf={conf:.2} ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
                 ocr_texts.push(text);
                 total_conf_sum += conf;
                 total_conf_count += 1;
             }
             Ok((_, conf)) => {
-                log::warn!("OCR confidence {conf:.2} below threshold for page {page_idx} of {}", path.display());
+                log::warn!("OCR page {}/{} of {}: low conf={conf:.2} ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
             Err(AppError::Indexer(msg)) if msg == "cancelled" => {
                 return Err(AppError::Indexer("cancelled".into()));
             }
             Err(e) => {
-                log::warn!("OCR failed for page {page_idx} of {}: {e}", path.display());
+                log::warn!("OCR page {}/{} of {}: error ms={elapsed_ms} {e}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
         }
@@ -295,14 +301,19 @@ fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url:
             None => continue,
         };
 
-        match vision::describe_image(tmp_path, ollama_url, cancel) {
+        let started = std::time::Instant::now();
+        let outcome = vision::describe_image(tmp_path, ollama_url, cancel);
+        let elapsed_ms = started.elapsed().as_millis();
+        match outcome {
             Ok(desc) if !desc.trim().is_empty() => {
-                log::info!("vision fallback succeeded for page {page_idx} of {}", path.display());
+                log::info!("vision page {page_idx} of {}: ok ms={elapsed_ms} desc_len={}", path.display(), desc.len());
                 descriptions.push(desc);
             }
-            Ok(_) => {}
+            Ok(_) => {
+                log::warn!("vision page {page_idx} of {}: empty ms={elapsed_ms}", path.display());
+            }
             Err(e) => {
-                log::warn!("vision fallback failed for page {page_idx} of {}: {e}", path.display());
+                log::warn!("vision page {page_idx} of {}: error ms={elapsed_ms} {e}", path.display());
             }
         }
 
@@ -328,8 +339,9 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         .set_maximum_height(720);
 
     let mut descriptions = Vec::new();
+    let total_pages = doc.pages().len();
 
-    for page in doc.pages().iter() {
+    for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
@@ -365,10 +377,20 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         let tmp_path = tmp.path().to_str().ok_or_else(|| {
             AppError::Extractor("tmp path is not valid UTF-8".into())
         })?;
-        match vision::describe_image(tmp_path, ollama_url, cancel) {
-            Ok(desc) if !desc.trim().is_empty() => descriptions.push(desc),
-            Ok(_) => {}
-            Err(_) => {} // skip pages where vision fails
+        let started = std::time::Instant::now();
+        let outcome = vision::describe_image(tmp_path, ollama_url, cancel);
+        let elapsed_ms = started.elapsed().as_millis();
+        match outcome {
+            Ok(desc) if !desc.trim().is_empty() => {
+                log::info!("vision page {}/{} of {}: ok ms={elapsed_ms} desc_len={}", page_idx + 1, total_pages, path.display(), desc.len());
+                descriptions.push(desc);
+            }
+            Ok(_) => {
+                log::warn!("vision page {}/{} of {}: empty ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
+            }
+            Err(e) => {
+                log::warn!("vision page {}/{} of {}: error ms={elapsed_ms} {e}", page_idx + 1, total_pages, path.display());
+            }
         }
     }
 
