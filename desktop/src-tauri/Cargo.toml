@@ -40,6 +40,7 @@ base64 = "0.22"
 leptess = "0.14"
 whatlang = "0.16"
 log = "0.4"
+env_logger = "0.11"
 tempfile = "3"
 
 [dev-dependencies]
