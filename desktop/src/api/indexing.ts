@@ -1,7 +1,7 @@
-import { invoke, Channel } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import type { RootPayload } from './settings';
 
-export interface ProgressEvent {
+export interface ProgressSnapshot {
   jobId: number;
   rootId: number;
   seq: number;
@@ -16,19 +16,19 @@ export interface ProgressEvent {
   currentFile: string | null;
   extractionTotal: number;
   extractionDone: number;
+  isComplete: boolean;
 }
 
 export async function addRoot(path: string): Promise<RootPayload> {
   return invoke<RootPayload>('add_root', { path });
 }
 
-export async function startIndexing(
-  rootId: number,
-  onProgress: (event: ProgressEvent) => void,
-): Promise<number> {
-  const channel = new Channel<ProgressEvent>();
-  channel.onmessage = onProgress;
-  return invoke<number>('start_indexing', { rootId, onProgress: channel });
+export async function startIndexing(rootId: number): Promise<void> {
+  return invoke<void>('start_indexing', { rootId });
+}
+
+export async function getIndexingProgress(): Promise<ProgressSnapshot | null> {
+  return invoke<ProgressSnapshot | null>('get_indexing_progress');
 }
 
 export async function cancelIndexing(): Promise<void> {

@@ -1,288 +1,152 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { useIndexing, IndexingProvider } from '../../src/hooks/useIndexing';
-import { startIndexing as apiStartIndexing, cancelIndexing as apiCancelIndexing } from '../../src/api/indexing';
-import type { ProgressEvent } from '../../src/api/indexing';
+import {
+  startIndexing as apiStartIndexing,
+  cancelIndexing as apiCancelIndexing,
+  getIndexingProgress as apiGetIndexingProgress,
+  getActivityLog as apiGetActivityLog,
+  type ProgressSnapshot,
+} from '../../src/api/indexing';
 
 vi.mock('../../src/api/indexing', () => ({
-  startIndexing: vi.fn().mockResolvedValue(1),
+  startIndexing: vi.fn().mockResolvedValue(undefined),
   cancelIndexing: vi.fn().mockResolvedValue(undefined),
+  getIndexingProgress: vi.fn().mockResolvedValue(null),
   getActivityLog: vi.fn().mockResolvedValue([]),
 }));
 
-const mockListen = vi.mocked(listen);
-const mockApiStartIndexing = vi.mocked(apiStartIndexing);
-const mockApiCancelIndexing = vi.mocked(apiCancelIndexing);
-
-type TerminalHandler = (e: { payload: unknown }) => void;
+const mockStart = vi.mocked(apiStartIndexing);
+const mockCancel = vi.mocked(apiCancelIndexing);
+const mockGetProgress = vi.mocked(apiGetIndexingProgress);
+const mockGetActivity = vi.mocked(apiGetActivityLog);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
-  mockListen.mockResolvedValue(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-// Wrapper that mounts the provider so useIndexing() reads from context.
 const wrapper = ({ children }: { children: ReactNode }) => (
   <IndexingProvider>{children}</IndexingProvider>
 );
 
-// Render the hook inside a provider and wait for the setup useEffect to settle.
-async function renderAndSettle() {
-  const hook = renderHook(() => useIndexing(), { wrapper });
-  await act(async () => {}); // let the setup useEffect run
-  return hook;
+function snap(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
+  return {
+    jobId: 42,
+    rootId: 1,
+    seq: 1,
+    phase: 'discovering',
+    filesTotal: 0,
+    filesDone: 0,
+    filesAdded: 0,
+    filesUpdated: 0,
+    filesMoved: 0,
+    filesDeleted: 0,
+    errorCount: 0,
+    currentFile: null,
+    extractionTotal: 0,
+    extractionDone: 0,
+    isComplete: false,
+    ...overrides,
+  };
 }
 
-describe('useIndexing (provider)', () => {
-  it('starts with empty jobs and null activeJob', async () => {
-    const { result } = await renderAndSettle();
+describe('useIndexing (polling provider)', () => {
+  it('starts with empty jobs and null activeJob', () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
     expect(result.current.jobs).toEqual([]);
     expect(result.current.activeJob).toBeNull();
   });
 
-  it('marks job completed when indexing://completed fires', async () => {
-    const handlers: Record<string, TerminalHandler> = {};
-    mockListen.mockImplementation((event, handler) => {
-      handlers[event as string] = handler as TerminalHandler;
-      return Promise.resolve(() => {});
-    });
+  it('shows pending placeholder immediately on startIndexing', async () => {
+    mockGetProgress.mockResolvedValue(null);
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await act(async () => { await result.current.startIndexing(1); });
+    expect(result.current.activeJob).not.toBeNull();
+    expect(result.current.activeJob?.rootId).toBe(1);
+    expect(result.current.activeJob?.filesTotal).toBe(0);
+  });
 
-    const { result } = await renderAndSettle();
+  it('upserts the real job from a poll snapshot', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValue(snap({ jobId: 99, filesTotal: 10, filesDone: 3, phase: 'fingerprinting' }));
+    await act(async () => { await result.current.startIndexing(1); });
+    // First pollOnce runs synchronously inside startPolling; await its microtask.
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.jobId).toBe(99);
+    expect(result.current.activeJob?.filesTotal).toBe(10);
+    expect(result.current.activeJob?.filesDone).toBe(3);
+    expect(result.current.activeJob?.phase).toBe('fingerprinting');
+  });
 
-    act(() => {
-      handlers['indexing://completed']?.({
-        payload: { jobId: 1, rootId: 10, filesTotal: 50, filesAdded: 10, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 },
-      });
-    });
+  it('drops stale snapshots with seq <= last seen', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 5, filesDone: 5 }));
+    await act(async () => { await result.current.startIndexing(1); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.filesDone).toBe(5);
 
-    expect(result.current.jobs).toHaveLength(1);
-    expect(result.current.jobs[0].jobId).toBe(1);
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 3, filesDone: 99 })); // stale
+    await act(async () => { vi.advanceTimersByTime(250); });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.filesDone).toBe(5);
+  });
+
+  it('marks job complete and stops polling when snapshot.isComplete=true', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 1, filesDone: 5, filesTotal: 5, isComplete: true }));
+    mockGetActivity.mockResolvedValue([
+      { jobId: 42, rootId: 1, filesTotal: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0, completedAt: 1700000000 },
+    ]);
+
+    await act(async () => { await result.current.startIndexing(1); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(result.current.activeJob).toBeNull();
     expect(result.current.jobs[0].isComplete).toBe(true);
     expect(result.current.jobs[0].phase).toBe('completed');
-    expect(result.current.activeJob).toBeNull();
+    expect(result.current.jobs[0].filesAdded).toBe(5);
+    expect(result.current.jobs[0].completedAt).toBe(1700000000);
+
+    const callsBefore = mockGetProgress.mock.calls.length;
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mockGetProgress.mock.calls.length).toBe(callsBefore);
   });
 
-  it('marks job complete on indexing://completed even without prior progress event', async () => {
-    const handlers: Record<string, TerminalHandler> = {};
-    mockListen.mockImplementation((event, handler) => {
-      handlers[event as string] = handler as TerminalHandler;
-      return Promise.resolve(() => {});
-    });
-
-    const { result } = await renderAndSettle();
-
-    act(() => {
-      handlers['indexing://completed']?.({
-        payload: { jobId: 42, rootId: 9, filesTotal: 5, filesAdded: 5, filesUpdated: 0, filesMoved: 0, filesDeleted: 0, errorCount: 0 },
-      });
-    });
-
-    expect(result.current.jobs).toHaveLength(1);
-    expect(result.current.jobs[0].jobId).toBe(42);
-    expect(result.current.jobs[0].isComplete).toBe(true);
-    expect(result.current.activeJob).toBeNull();
-  });
-
-  it('marks job cancelled when indexing://cancelled fires', async () => {
-    const handlers: Record<string, TerminalHandler> = {};
-    mockListen.mockImplementation((event, handler) => {
-      handlers[event as string] = handler as TerminalHandler;
-      return Promise.resolve(() => {});
-    });
-
-    const { result } = await renderAndSettle();
-
-    act(() => {
-      handlers['indexing://cancelled']?.({
-        payload: { jobId: 3, rootId: 2 },
-      });
-    });
-
-    expect(result.current.jobs).toHaveLength(1);
-    expect(result.current.jobs[0].isComplete).toBe(true);
-  });
-
-  it('progress events arrive via channel callback and update state', async () => {
-    let capturedOnProgress: ((p: ProgressEvent) => void) | null = null;
-    let resolveStart!: (v: number) => void;
-    mockApiStartIndexing.mockImplementation(async (_rootId, onProgress) => {
-      capturedOnProgress = onProgress!;
-      return new Promise<number>((r) => { resolveStart = r; });
-    });
-
-    const { result } = await renderAndSettle();
-
-    // Start indexing (does not resolve yet so we can push events).
-    let startDone = false;
-    act(() => {
-      result.current.startIndexing(10).then(() => { startDone = true; });
-    });
-    await act(async () => { await Promise.resolve(); });
-
-    // Push first event.
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 10, seq: 1, phase: 'discovering',
-        filesTotal: 100, filesDone: 20, filesAdded: 5, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
-
-    const job = result.current.jobs.find((j) => j.jobId === 1);
-    expect(job).toBeDefined();
-    expect(job?.phase).toBe('discovering');
-    expect(job?.filesDone).toBe(20);
-
-    // Push second event — should update, not add a duplicate.
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 10, seq: 2, phase: 'extracting',
-        filesTotal: 100, filesDone: 60, filesAdded: 5, filesUpdated: 10,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: 'notes.txt', extractionTotal: 10, extractionDone: 3,
-      });
-    });
-
-    const activeJobs = result.current.jobs.filter((j) => j.jobId === 1);
-    expect(activeJobs).toHaveLength(1);
-    expect(activeJobs[0].phase).toBe('extracting');
-    expect(activeJobs[0].currentFile).toBe('notes.txt');
-
-    // Resolve start so cleanup happens.
-    await act(async () => { resolveStart(1); });
-    expect(startDone).toBe(true);
-  });
-
-  it('drops progress events with stale seq', async () => {
-    let capturedOnProgress: ((p: ProgressEvent) => void) | null = null;
-    mockApiStartIndexing.mockImplementation(async (_rootId, onProgress) => {
-      capturedOnProgress = onProgress!;
-      return new Promise<number>(() => {}); // hangs
-    });
-
-    const { result } = await renderAndSettle();
-
-    act(() => {
-      result.current.startIndexing(5);
-    });
-    await act(async () => { await Promise.resolve(); });
-
-    // Higher seq arrives first.
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 5, seq: 2, phase: 'extracting',
-        filesTotal: 10, filesDone: 5, filesAdded: 0, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
-    // Stale seq=1 arrives late — must be dropped.
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 5, seq: 1, phase: 'discovering',
-        filesTotal: 10, filesDone: 1, filesAdded: 0, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
-
-    const job = result.current.jobs.find((j) => j.jobId === 1);
-    expect(job?.phase).toBe('extracting'); // seq=1 was dropped; seq=2 state kept
-    expect(job?.filesDone).toBe(5);
-  });
-
-  it('cancelIndexing optimistically dismisses the hero before the cancelled event arrives', async () => {
-    let capturedOnProgress: ((p: ProgressEvent) => void) | null = null;
-    mockApiStartIndexing.mockImplementation(async (_rootId, onProgress) => {
-      capturedOnProgress = onProgress!;
-      return new Promise<number>(() => {}); // hangs
-    });
-
-    const { result } = await renderAndSettle();
-
-    act(() => { result.current.startIndexing(3); });
-    await act(async () => { await Promise.resolve(); });
-
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 5, rootId: 3, seq: 1, phase: 'extracting',
-        filesTotal: 100, filesDone: 5, filesAdded: 5, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
+  it('cancel marks all active jobs complete and calls the cancel command', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await act(async () => { await result.current.startIndexing(1); });
     expect(result.current.activeJob).not.toBeNull();
 
     await act(async () => { await result.current.cancelIndexing(); });
-
     expect(result.current.activeJob).toBeNull();
-    expect(mockApiCancelIndexing).toHaveBeenCalled();
-    expect(result.current.jobs.find((j) => j.jobId === 5)?.isComplete).toBe(true);
+    expect(mockCancel).toHaveBeenCalledTimes(1);
   });
 
-  it('computes progressPercent from filesDone / filesTotal', async () => {
-    let capturedOnProgress: ((p: ProgressEvent) => void) | null = null;
-    mockApiStartIndexing.mockImplementation(async (_rootId, onProgress) => {
-      capturedOnProgress = onProgress!;
-      return new Promise<number>(() => {});
-    });
+  it('startIndexing throws and clears placeholder if backend invoke fails', async () => {
+    mockStart.mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    await expect(
+      act(async () => { await result.current.startIndexing(1); })
+    ).rejects.toThrow('boom');
+    expect(result.current.activeJob).toBeNull();
+  });
 
-    const { result } = await renderAndSettle();
-
-    act(() => { result.current.startIndexing(10); });
+  it('progressPercent computes from done/total, 0 when total is 0', async () => {
+    const { result } = renderHook(() => useIndexing(), { wrapper });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 1, filesDone: 3, filesTotal: 10 }));
+    await act(async () => { await result.current.startIndexing(1); });
     await act(async () => { await Promise.resolve(); });
+    expect(result.current.activeJob?.progressPercent).toBe(30);
 
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 10, seq: 1, phase: 'extracting',
-        filesTotal: 200, filesDone: 50, filesAdded: 0, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
-
-    expect(result.current.jobs.find((j) => j.jobId === 1)?.progressPercent).toBe(25);
-  });
-
-  it('progressPercent is 0 when filesTotal is 0', async () => {
-    let capturedOnProgress: ((p: ProgressEvent) => void) | null = null;
-    mockApiStartIndexing.mockImplementation(async (_rootId, onProgress) => {
-      capturedOnProgress = onProgress!;
-      return new Promise<number>(() => {});
-    });
-
-    const { result } = await renderAndSettle();
-
-    act(() => { result.current.startIndexing(10); });
+    mockGetProgress.mockResolvedValueOnce(snap({ seq: 2, filesDone: 0, filesTotal: 0 }));
+    await act(async () => { vi.advanceTimersByTime(250); });
     await act(async () => { await Promise.resolve(); });
-
-    act(() => {
-      capturedOnProgress?.({
-        jobId: 1, rootId: 10, seq: 1, phase: 'discovering',
-        filesTotal: 0, filesDone: 0, filesAdded: 0, filesUpdated: 0,
-        filesMoved: 0, filesDeleted: 0, errorCount: 0,
-        currentFile: null, extractionTotal: 0, extractionDone: 0,
-      });
-    });
-
-    expect(result.current.jobs.find((j) => j.jobId === 1)?.progressPercent).toBe(0);
-  });
-
-  it('calls unlisten on unmount', async () => {
-    const unlisten = vi.fn();
-    mockListen.mockResolvedValue(unlisten);
-
-    const { unmount } = await renderAndSettle();
-    unmount();
-
-    expect(unlisten).toHaveBeenCalled();
+    expect(result.current.activeJob?.progressPercent).toBe(0);
   });
 });
