@@ -194,6 +194,22 @@ fn test_ocr_confidence_threshold_constant() {
 }
 
 #[test]
+fn test_run_tesseract_bounded_returns_quickly_on_cancel() {
+    use std::time::{Duration, Instant};
+    let tessdata = crate::platform::tessdata_dir();
+    let img = image::RgbaImage::new(2048, 2048);
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let started = Instant::now();
+    let result = pdf::run_tesseract_bounded(tessdata, img, &cancel, 90);
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(result, Err(crate::errors::AppError::Indexer(ref msg)) if msg == "cancelled"),
+        "expected cancelled error, got: {result:?}"
+    );
+    assert!(elapsed < Duration::from_secs(2), "cancel not honoured promptly; took {elapsed:?}");
+}
+
+#[test]
 fn test_ocr_on_clean_png_image() {
     let tessdata = crate::platform::tessdata_dir();
     let img_path = fixtures().join("16626587.png");

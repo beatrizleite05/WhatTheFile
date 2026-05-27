@@ -7,6 +7,10 @@ use super::{detect_lang, ExtractResult};
 /// OCR confidence threshold — chunks below this are discarded.
 pub(super) const OCR_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
+/// Hard per-page wall-clock budget for Tesseract. Leptess cannot be interrupted
+/// mid-page, so this lets the indexer skip a pathological page rather than wedge.
+pub(super) const OCR_PAGE_TIMEOUT_SECS: u64 = 90;
+
 /// Confidence assigned to vision-model output.
 ///
 /// Vision descriptions are best-effort; we use the OCR threshold as a
@@ -99,16 +103,18 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
 
         let rgba = bitmap.as_image().into_rgba8();
 
-        match run_tesseract_on_rgba(&tessdata, &rgba) {
+        match run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS) {
             Ok((text, conf)) if conf >= OCR_CONFIDENCE_THRESHOLD && !text.trim().is_empty() => {
                 ocr_texts.push(text);
                 total_conf_sum += conf;
                 total_conf_count += 1;
             }
             Ok((_, conf)) => {
-                // OCR ran but confidence too low — queue for vision fallback.
                 log::warn!("OCR confidence {conf:.2} below threshold for page {page_idx} of {}", path.display());
                 low_conf_page_indices.push(page_idx);
+            }
+            Err(AppError::Indexer(msg)) if msg == "cancelled" => {
+                return Err(AppError::Indexer("cancelled".into()));
             }
             Err(e) => {
                 log::warn!("OCR failed for page {page_idx} of {}: {e}", path.display());
@@ -168,6 +174,47 @@ pub(super) fn run_tesseract_on_rgba(
     let conf = lt.mean_text_conf() as f32 / 100.0;
 
     Ok((text, conf))
+}
+
+/// Run Tesseract on a worker thread with cancel polling and a wall-clock budget.
+///
+/// Tesseract cannot be interrupted mid-page (leptess holds a native handle and
+/// `get_utf8_text` blocks), so the worker keeps running after timeout — but the
+/// caller is unblocked and can skip the page. This prevents one pathological
+/// page from wedging the entire indexer.
+pub(super) fn run_tesseract_bounded(
+    tessdata: String,
+    img: image::RgbaImage,
+    cancel: &Arc<AtomicBool>,
+    timeout_secs: u64,
+) -> Result<(String, f32), AppError> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_tesseract_on_rgba(&tessdata, &img));
+    });
+
+    let mut elapsed = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                elapsed += 1;
+                if elapsed >= timeout_secs {
+                    return Err(AppError::Extractor(format!(
+                        "Tesseract timed out after {timeout_secs}s"
+                    )));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AppError::Extractor("Tesseract worker disconnected".into()));
+            }
+        }
+    }
 }
 
 /// Run vision model on a specific subset of pages from a PDF.
