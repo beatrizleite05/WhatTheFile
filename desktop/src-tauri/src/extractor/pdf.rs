@@ -35,19 +35,23 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;
 
+    log::info!("pdf: opening {}", path.display());
     let pdfium = pdfium_instance()?;
     let doc = pdfium
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+    let page_count = doc.pages().len();
+    log::info!("pdf: opened {} ({} pages); extracting text layer", path.display(), page_count);
 
     let mut text = String::new();
-    for page in doc.pages().iter() {
+    for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
         let page_text = page.text()
             .map_err(|e| AppError::Extractor(format!("pdfium text error: {e}")))?
             .all();
+        log::debug!("pdf text-layer page {}/{} of {}: chars={}", page_idx + 1, page_count, path.display(), page_text.len());
         if !page_text.trim().is_empty() {
             text.push_str(&page_text);
             text.push('\n');
@@ -56,12 +60,12 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
 
     let trimmed = text.trim().to_string();
     if !trimmed.is_empty() {
+        log::info!("pdf: text layer of {} yielded {} chars; done", path.display(), trimmed.len());
         let lang_hint = detect_lang(&trimmed);
         return Ok(ExtractResult { text: trimmed, confidence: 1.0, lang_hint });
     }
 
-    // No text layer — scanned PDF. Try OCR first; fall back to vision if OCR
-    // confidence is too low or Tesseract is unavailable.
+    log::info!("pdf: no text layer for {}; falling back to OCR", path.display());
     extract_pdf_via_ocr(path, ollama_url, cancel)
 }
 
