@@ -80,12 +80,14 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;
 
+    log::info!("ocr: pdfium re-bind for {}", path.display());
     let pdfium = pdfium_instance()?;
+    log::info!("ocr: pdfium re-open for {}", path.display());
     let doc = pdfium
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+    log::info!("ocr: pdfium re-opened for {}", path.display());
 
-    // Higher resolution gives Tesseract more pixels to work with.
     let render_config = PdfRenderConfig::new()
         .set_target_width(1024)
         .set_maximum_height(1440);
@@ -96,7 +98,9 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
     let mut total_conf_count = 0u32;
 
     let tessdata = crate::platform::tessdata_dir();
+    log::info!("ocr: tessdata={tessdata}");
     let total_pages = doc.pages().len();
+    log::info!("ocr: starting page loop ({total_pages} pages) for {}", path.display());
 
     for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
