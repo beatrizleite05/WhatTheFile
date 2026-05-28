@@ -66,6 +66,8 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
     }
 
     log::info!("pdf: no text layer for {}; falling back to OCR", path.display());
+    drop(doc);
+    drop(pdfium);
     extract_pdf_via_ocr(path, ollama_url, cancel)
 }
 
@@ -143,12 +145,15 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
         }
     }
 
-    // If OCR produced nothing at all, fall through to full vision pass.
     if ocr_texts.is_empty() {
         log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
+        drop(doc);
+        drop(pdfium);
         return extract_pdf_via_vision(path, ollama_url, cancel);
     }
 
+    drop(doc);
+    drop(pdfium);
     // For pages OCR couldn't handle, attempt vision on those pages only.
     if !low_conf_page_indices.is_empty() {
         let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url, cancel);
