@@ -102,11 +102,17 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
+        log::info!("OCR page {}/{} of {}: rendering", page_idx + 1, total_pages, path.display());
+        let render_started = std::time::Instant::now();
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| AppError::Extractor(format!("pdfium render error page {page_idx}: {e}")))?;
+        let render_ms = render_started.elapsed().as_millis();
 
+        let rgba_started = std::time::Instant::now();
         let rgba = bitmap.as_image().into_rgba8();
+        let rgba_ms = rgba_started.elapsed().as_millis();
+        log::info!("OCR page {}/{} of {}: rendered render_ms={render_ms} rgba_ms={rgba_ms}; running tesseract", page_idx + 1, total_pages, path.display());
 
         let started = std::time::Instant::now();
         let outcome = run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS);
