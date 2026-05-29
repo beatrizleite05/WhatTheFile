@@ -66,6 +66,7 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
     }
 
     log::info!("pdf: no text layer for {}; falling back to OCR", path.display());
+    // Release before tail-call; pdfium deadlocks if two instances overlap (#12).
     drop(doc);
     drop(pdfium);
     extract_pdf_via_ocr(path, ollama_url, cancel)
@@ -82,13 +83,10 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;
 
-    log::info!("ocr: pdfium re-bind for {}", path.display());
     let pdfium = pdfium_instance()?;
-    log::info!("ocr: pdfium re-open for {}", path.display());
     let doc = pdfium
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
-    log::info!("ocr: pdfium re-opened for {}", path.display());
 
     let render_config = PdfRenderConfig::new()
         .set_target_width(1024)
@@ -100,61 +98,53 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
     let mut total_conf_count = 0u32;
 
     let tessdata = crate::platform::tessdata_dir();
-    log::info!("ocr: tessdata={tessdata}");
     let total_pages = doc.pages().len();
-    log::info!("ocr: starting page loop ({total_pages} pages) for {}", path.display());
+    log::info!("ocr: {} pages of {}", total_pages, path.display());
 
     for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
-        log::info!("OCR page {}/{} of {}: rendering", page_idx + 1, total_pages, path.display());
         let render_started = std::time::Instant::now();
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| AppError::Extractor(format!("pdfium render error page {page_idx}: {e}")))?;
         let render_ms = render_started.elapsed().as_millis();
-
-        let rgba_started = std::time::Instant::now();
         let rgba = bitmap.as_image().into_rgba8();
-        let rgba_ms = rgba_started.elapsed().as_millis();
-        log::info!("OCR page {}/{} of {}: rendered render_ms={render_ms} rgba_ms={rgba_ms}; running tesseract", page_idx + 1, total_pages, path.display());
 
-        let started = std::time::Instant::now();
+        let ocr_started = std::time::Instant::now();
         let outcome = run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS);
-        let elapsed_ms = started.elapsed().as_millis();
+        let ocr_ms = ocr_started.elapsed().as_millis();
 
         match outcome {
             Ok((text, conf)) if conf >= OCR_CONFIDENCE_THRESHOLD && !text.trim().is_empty() => {
-                log::info!("OCR page {}/{} of {}: ok conf={conf:.2} ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
+                log::info!("OCR page {}/{} of {}: ok conf={conf:.2} render_ms={render_ms} ocr_ms={ocr_ms}", page_idx + 1, total_pages, path.display());
                 ocr_texts.push(text);
                 total_conf_sum += conf;
                 total_conf_count += 1;
             }
             Ok((_, conf)) => {
-                log::warn!("OCR page {}/{} of {}: low conf={conf:.2} ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
+                log::warn!("OCR page {}/{} of {}: low conf={conf:.2} render_ms={render_ms} ocr_ms={ocr_ms}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
             Err(AppError::Indexer(msg)) if msg == "cancelled" => {
                 return Err(AppError::Indexer("cancelled".into()));
             }
             Err(e) => {
-                log::warn!("OCR page {}/{} of {}: error ms={elapsed_ms} {e}", page_idx + 1, total_pages, path.display());
+                log::warn!("OCR page {}/{} of {}: error render_ms={render_ms} ocr_ms={ocr_ms} {e}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
         }
     }
 
-    if ocr_texts.is_empty() {
-        log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
-        drop(doc);
-        drop(pdfium);
-        return extract_pdf_via_vision(path, ollama_url, cancel);
-    }
-
+    // Release before tail-call; pdfium deadlocks if two instances overlap (#12).
     drop(doc);
     drop(pdfium);
-    // For pages OCR couldn't handle, attempt vision on those pages only.
+
+    if ocr_texts.is_empty() {
+        log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
+        return extract_pdf_via_vision(path, ollama_url, cancel);
+    }
     if !low_conf_page_indices.is_empty() {
         let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url, cancel);
         ocr_texts.extend(vision_texts);
