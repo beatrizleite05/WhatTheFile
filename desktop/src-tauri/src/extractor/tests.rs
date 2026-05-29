@@ -194,6 +194,22 @@ fn test_ocr_confidence_threshold_constant() {
 }
 
 #[test]
+fn test_run_tesseract_bounded_returns_quickly_on_cancel() {
+    use std::time::{Duration, Instant};
+    let tessdata = crate::platform::tessdata_dir();
+    let img = image::RgbaImage::new(2048, 2048);
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let started = Instant::now();
+    let result = pdf::run_tesseract_bounded(tessdata, img, &cancel, 90);
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(result, Err(crate::errors::AppError::Indexer(ref msg)) if msg == "cancelled"),
+        "expected cancelled error, got: {result:?}"
+    );
+    assert!(elapsed < Duration::from_secs(2), "cancel not honoured promptly; took {elapsed:?}");
+}
+
+#[test]
 fn test_ocr_on_clean_png_image() {
     let tessdata = crate::platform::tessdata_dir();
     let img_path = fixtures().join("16626587.png");
@@ -222,6 +238,52 @@ fn test_extract_pdf_scanned_via_ocr() {
     assert!(!result.text.is_empty(), "scanned PDF should produce OCR text");
     assert!(result.confidence > 0.0 && result.confidence <= 1.0);
 }
+
+#[test]
+fn test_extract_pdf_completes_in_bounded_time() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let path = fixtures().join("Naac_appLetter.pdf");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = extract(&path, "http://127.0.0.1:19999", &no_cancel());
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(180)) {
+        Ok(Ok(result)) => assert!(!result.text.is_empty()),
+        Ok(Err(e)) => panic!("extract returned error: {e:?}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("extract did not return within 180s (issue #12 regression)"),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("worker died"),
+    }
+}
+
+#[test]
+#[ignore = "deliberately deadlocks; documents the pdfium overlap constraint that bbbb22c works around"]
+fn test_pdfium_instance_overlapping_lifetimes_deadlock_on_same_thread() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let first = pdf::pdfium_instance();
+        let second = pdf::pdfium_instance();
+        let _ = tx.send((first.is_ok(), second.is_ok()));
+    });
+
+    match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok((true, true)) => panic!(
+            "two overlapping pdfium_instance() calls on the same thread returned — \
+             the unsafety this test guards against has been fixed properly. \
+             Remove the drop() workarounds added in bbbb22c, then delete this test."
+        ),
+        Ok((a, b)) => panic!("pdfium_instance unexpected failure: first={a} second={b}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("worker died"),
+    }
+}
+
 
 // ── Image + vision fallback — require Ollama ──────────────────────────────────
 

@@ -303,3 +303,7 @@ fn extract_image(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) -> Res
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bench.rs"]
+mod bench;

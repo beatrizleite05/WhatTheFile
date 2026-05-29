@@ -7,6 +7,10 @@ use super::{detect_lang, ExtractResult};
 /// OCR confidence threshold — chunks below this are discarded.
 pub(super) const OCR_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
+/// Hard per-page wall-clock budget for Tesseract. Leptess cannot be interrupted
+/// mid-page, so this lets the indexer skip a pathological page rather than wedge.
+pub(super) const OCR_PAGE_TIMEOUT_SECS: u64 = 90;
+
 /// Confidence assigned to vision-model output.
 ///
 /// Vision descriptions are best-effort; we use the OCR threshold as a
@@ -31,19 +35,23 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         AppError::Extractor(format!("invalid PDF path: {}", path.display()))
     })?;
 
+    log::info!("pdf: opening {}", path.display());
     let pdfium = pdfium_instance()?;
     let doc = pdfium
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
+    let page_count = doc.pages().len();
+    log::info!("pdf: opened {} ({} pages); extracting text layer", path.display(), page_count);
 
     let mut text = String::new();
-    for page in doc.pages().iter() {
+    for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
         let page_text = page.text()
             .map_err(|e| AppError::Extractor(format!("pdfium text error: {e}")))?
             .all();
+        log::debug!("pdf text-layer page {}/{} of {}: chars={}", page_idx + 1, page_count, path.display(), page_text.len());
         if !page_text.trim().is_empty() {
             text.push_str(&page_text);
             text.push('\n');
@@ -52,12 +60,15 @@ pub(super) fn extract_pdf(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
 
     let trimmed = text.trim().to_string();
     if !trimmed.is_empty() {
+        log::info!("pdf: text layer of {} yielded {} chars; done", path.display(), trimmed.len());
         let lang_hint = detect_lang(&trimmed);
         return Ok(ExtractResult { text: trimmed, confidence: 1.0, lang_hint });
     }
 
-    // No text layer — scanned PDF. Try OCR first; fall back to vision if OCR
-    // confidence is too low or Tesseract is unavailable.
+    log::info!("pdf: no text layer for {}; falling back to OCR", path.display());
+    // Release before tail-call; pdfium deadlocks if two instances overlap (#12).
+    drop(doc);
+    drop(pdfium);
     extract_pdf_via_ocr(path, ollama_url, cancel)
 }
 
@@ -77,7 +88,6 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
         .load_pdf_from_file(path_str, None)
         .map_err(|e| AppError::Extractor(format!("pdfium open error {}: {e}", path.display())))?;
 
-    // Higher resolution gives Tesseract more pixels to work with.
     let render_config = PdfRenderConfig::new()
         .set_target_width(1024)
         .set_maximum_height(1440);
@@ -88,42 +98,53 @@ fn extract_pdf_via_ocr(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool>) 
     let mut total_conf_count = 0u32;
 
     let tessdata = crate::platform::tessdata_dir();
+    let total_pages = doc.pages().len();
+    log::info!("ocr: {} pages of {}", total_pages, path.display());
 
     for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
+        let render_started = std::time::Instant::now();
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| AppError::Extractor(format!("pdfium render error page {page_idx}: {e}")))?;
-
+        let render_ms = render_started.elapsed().as_millis();
         let rgba = bitmap.as_image().into_rgba8();
 
-        match run_tesseract_on_rgba(&tessdata, &rgba) {
+        let ocr_started = std::time::Instant::now();
+        let outcome = run_tesseract_bounded(tessdata.clone(), rgba, cancel, OCR_PAGE_TIMEOUT_SECS);
+        let ocr_ms = ocr_started.elapsed().as_millis();
+
+        match outcome {
             Ok((text, conf)) if conf >= OCR_CONFIDENCE_THRESHOLD && !text.trim().is_empty() => {
+                log::info!("OCR page {}/{} of {}: ok conf={conf:.2} render_ms={render_ms} ocr_ms={ocr_ms}", page_idx + 1, total_pages, path.display());
                 ocr_texts.push(text);
                 total_conf_sum += conf;
                 total_conf_count += 1;
             }
             Ok((_, conf)) => {
-                // OCR ran but confidence too low — queue for vision fallback.
-                log::warn!("OCR confidence {conf:.2} below threshold for page {page_idx} of {}", path.display());
+                log::warn!("OCR page {}/{} of {}: low conf={conf:.2} render_ms={render_ms} ocr_ms={ocr_ms}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
+            Err(AppError::Indexer(msg)) if msg == "cancelled" => {
+                return Err(AppError::Indexer("cancelled".into()));
+            }
             Err(e) => {
-                log::warn!("OCR failed for page {page_idx} of {}: {e}", path.display());
+                log::warn!("OCR page {}/{} of {}: error render_ms={render_ms} ocr_ms={ocr_ms} {e}", page_idx + 1, total_pages, path.display());
                 low_conf_page_indices.push(page_idx);
             }
         }
     }
 
-    // If OCR produced nothing at all, fall through to full vision pass.
+    // Release before tail-call; pdfium deadlocks if two instances overlap (#12).
+    drop(doc);
+    drop(pdfium);
+
     if ocr_texts.is_empty() {
         log::info!("OCR yielded no usable text for {}; falling back to vision", path.display());
         return extract_pdf_via_vision(path, ollama_url, cancel);
     }
-
-    // For pages OCR couldn't handle, attempt vision on those pages only.
     if !low_conf_page_indices.is_empty() {
         let vision_texts = extract_pdf_pages_via_vision(path, &low_conf_page_indices, ollama_url, cancel);
         ocr_texts.extend(vision_texts);
@@ -168,6 +189,47 @@ pub(super) fn run_tesseract_on_rgba(
     let conf = lt.mean_text_conf() as f32 / 100.0;
 
     Ok((text, conf))
+}
+
+/// Run Tesseract on a worker thread with cancel polling and a wall-clock budget.
+///
+/// Tesseract cannot be interrupted mid-page (leptess holds a native handle and
+/// `get_utf8_text` blocks), so the worker keeps running after timeout — but the
+/// caller is unblocked and can skip the page. This prevents one pathological
+/// page from wedging the entire indexer.
+pub(super) fn run_tesseract_bounded(
+    tessdata: String,
+    img: image::RgbaImage,
+    cancel: &Arc<AtomicBool>,
+    timeout_secs: u64,
+) -> Result<(String, f32), AppError> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_tesseract_on_rgba(&tessdata, &img));
+    });
+
+    let mut elapsed = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Indexer("cancelled".into()));
+        }
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                elapsed += 1;
+                if elapsed >= timeout_secs {
+                    return Err(AppError::Extractor(format!(
+                        "Tesseract timed out after {timeout_secs}s"
+                    )));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(AppError::Extractor("Tesseract worker disconnected".into()));
+            }
+        }
+    }
 }
 
 /// Run vision model on a specific subset of pages from a PDF.
@@ -248,14 +310,19 @@ fn extract_pdf_pages_via_vision(path: &Path, page_indices: &[usize], ollama_url:
             None => continue,
         };
 
-        match vision::describe_image(tmp_path, ollama_url, cancel) {
+        let started = std::time::Instant::now();
+        let outcome = vision::describe_image(tmp_path, ollama_url, cancel);
+        let elapsed_ms = started.elapsed().as_millis();
+        match outcome {
             Ok(desc) if !desc.trim().is_empty() => {
-                log::info!("vision fallback succeeded for page {page_idx} of {}", path.display());
+                log::info!("vision page {page_idx} of {}: ok ms={elapsed_ms} desc_len={}", path.display(), desc.len());
                 descriptions.push(desc);
             }
-            Ok(_) => {}
+            Ok(_) => {
+                log::warn!("vision page {page_idx} of {}: empty ms={elapsed_ms}", path.display());
+            }
             Err(e) => {
-                log::warn!("vision fallback failed for page {page_idx} of {}: {e}", path.display());
+                log::warn!("vision page {page_idx} of {}: error ms={elapsed_ms} {e}", path.display());
             }
         }
 
@@ -281,8 +348,9 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         .set_maximum_height(720);
 
     let mut descriptions = Vec::new();
+    let total_pages = doc.pages().len();
 
-    for page in doc.pages().iter() {
+    for (page_idx, page) in doc.pages().iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Err(AppError::Indexer("cancelled".into()));
         }
@@ -318,10 +386,20 @@ fn extract_pdf_via_vision(path: &Path, ollama_url: &str, cancel: &Arc<AtomicBool
         let tmp_path = tmp.path().to_str().ok_or_else(|| {
             AppError::Extractor("tmp path is not valid UTF-8".into())
         })?;
-        match vision::describe_image(tmp_path, ollama_url, cancel) {
-            Ok(desc) if !desc.trim().is_empty() => descriptions.push(desc),
-            Ok(_) => {}
-            Err(_) => {} // skip pages where vision fails
+        let started = std::time::Instant::now();
+        let outcome = vision::describe_image(tmp_path, ollama_url, cancel);
+        let elapsed_ms = started.elapsed().as_millis();
+        match outcome {
+            Ok(desc) if !desc.trim().is_empty() => {
+                log::info!("vision page {}/{} of {}: ok ms={elapsed_ms} desc_len={}", page_idx + 1, total_pages, path.display(), desc.len());
+                descriptions.push(desc);
+            }
+            Ok(_) => {
+                log::warn!("vision page {}/{} of {}: empty ms={elapsed_ms}", page_idx + 1, total_pages, path.display());
+            }
+            Err(e) => {
+                log::warn!("vision page {}/{} of {}: error ms={elapsed_ms} {e}", page_idx + 1, total_pages, path.display());
+            }
         }
     }
 
