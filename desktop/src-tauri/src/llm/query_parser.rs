@@ -1,9 +1,9 @@
 use crate::errors::AppError;
 use serde::Serialize;
 
-const MODEL: &str = "qwen2.5vl:7b";
+include!(concat!(env!("OUT_DIR"), "/media_types.rs"));
 
-const MEDIA_TYPES: &[&str] = &["pdf", "docx", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"];
+const MODEL: &str = "qwen2.5vl:7b";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

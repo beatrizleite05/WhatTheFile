@@ -16,6 +16,7 @@ path = "src/bin/eval.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["devtools", "macos-private-api"] }
