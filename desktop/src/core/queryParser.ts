@@ -1,6 +1,5 @@
 import type { ParsedQuery } from './types';
-
-const MEDIA_TYPES = ['pdf', 'docx', 'xlsx', 'csv', 'txt', 'md', 'png', 'jpg', 'jpeg'];
+import MEDIA_TYPES from './mediaTypes.json';
 
 export interface ParseResult {
   parsed: ParsedQuery;

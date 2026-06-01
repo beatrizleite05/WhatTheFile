@@ -1,9 +1,9 @@
 use crate::errors::AppError;
 use serde::Serialize;
 
-const MODEL: &str = "qwen2.5vl:7b";
+include!(concat!(env!("OUT_DIR"), "/media_types.rs"));
 
-const MEDIA_TYPES: &[&str] = &["pdf", "docx", "xlsx", "csv", "txt", "md", "png", "jpg", "jpeg"];
+const MODEL: &str = "qwen2.5vl:7b";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,5 +185,16 @@ mod tests {
     fn parse_query_ollama_unreachable_returns_err() {
         let result = parse_query("find the meeting notes from last quarter", "http://127.0.0.1:19999");
         assert!(matches!(result, Err(AppError::Llm(_))));
+    }
+
+    #[test]
+    fn media_types_matches_json_source() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let json_path = std::path::Path::new(manifest_dir).join("../src/core/mediaTypes.json");
+        let json = std::fs::read_to_string(&json_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", json_path.display()));
+        let from_json: Vec<String> = serde_json::from_str(&json).unwrap();
+        let from_const: Vec<String> = MEDIA_TYPES.iter().map(|s| s.to_string()).collect();
+        assert_eq!(from_const, from_json);
     }
 }
