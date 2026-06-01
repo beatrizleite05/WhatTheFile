@@ -117,11 +117,3 @@ function parseDeterministic(
   };
 }
 
-/** @deprecated transitional shim — removed when useSearch swaps to parseQuery. */
-export function parseNaturalLanguageQuery(
-  input: string,
-  mode: ParsedQuery['mode'] = 'hybrid',
-): { parsed: ParsedQuery; needsLlmFallback: boolean } {
-  const { parsed, useLlmFallback } = parseDeterministic(input, mode);
-  return { parsed, needsLlmFallback: useLlmFallback };
-}
