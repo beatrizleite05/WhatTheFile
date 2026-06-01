@@ -1,17 +1,35 @@
 import type { ParsedQuery } from './types';
 import MEDIA_TYPES from './mediaTypes.json';
 
-export interface ParseResult {
-  parsed: ParsedQuery;
-  // True when the deterministic pass left >3 tokens unresolved on a non-keyword
-  // query longer than 5 words — signals useSearch to fire an LLM fallback parse.
-  needsLlmFallback: boolean;
+export interface ParseQueryDeps {
+  llmFallback: (input: string, mode: ParsedQuery['mode']) => Promise<ParsedQuery>;
 }
 
-export function parseNaturalLanguageQuery(
+export async function parseQuery(
   input: string,
-  mode: ParsedQuery['mode'] = 'hybrid',
-): ParseResult {
+  mode: ParsedQuery['mode'],
+  deps: ParseQueryDeps,
+): Promise<ParsedQuery> {
+  const { parsed, useLlmFallback } = parseDeterministic(input, mode);
+  if (!useLlmFallback) return parsed;
+
+  try {
+    return await deps.llmFallback(input, mode);
+  } catch (err) {
+    console.warn('[queryParser] LLM fallback failed; using deterministic result', err);
+    return parsed;
+  }
+}
+
+interface DeterministicResult {
+  parsed: ParsedQuery;
+  useLlmFallback: boolean;
+}
+
+function parseDeterministic(
+  input: string,
+  mode: ParsedQuery['mode'],
+): DeterministicResult {
   const tokens = input.trim().split(/\s+/).filter(t => t.length > 0);
   const consumed = new Set<number>();
 
@@ -90,15 +108,20 @@ export function parseNaturalLanguageQuery(
   }
 
   const unresolvedTokens = tokens.filter((_, i) => !consumed.has(i));
-  // When all tokens are consumed as structured params (e.g. "pdf 2024"),
-  // fall back to the full input as query text so FTS/vector still have something to search.
   const queryText = unresolvedTokens.join(' ') || input.trim();
-  const wordCount = tokens.length;
-  const unresolvedCount = unresolvedTokens.length;
-  const needsLlmFallback = mode !== 'keyword' && wordCount > 5 && unresolvedCount > 3;
+  const useLlmFallback = mode !== 'keyword' && tokens.length > 5 && unresolvedTokens.length > 3;
 
   return {
     parsed: { queryText, mediaTypes, rootScope, dateFrom, dateTo, minConfidence, mode },
-    needsLlmFallback,
+    useLlmFallback,
   };
+}
+
+/** @deprecated transitional shim — removed when useSearch swaps to parseQuery. */
+export function parseNaturalLanguageQuery(
+  input: string,
+  mode: ParsedQuery['mode'] = 'hybrid',
+): { parsed: ParsedQuery; needsLlmFallback: boolean } {
+  const { parsed, useLlmFallback } = parseDeterministic(input, mode);
+  return { parsed, needsLlmFallback: useLlmFallback };
 }
