@@ -207,11 +207,11 @@ describe('useSearch', () => {
     expect((lastCall[1] as { query: { mode: string } }).query.mode).toBe('keyword');
   });
 
-  describe('LLM fallback (two-phase search)', () => {
+  describe('LLM fallback (unified parser)', () => {
     // A query that exceeds both thresholds: >5 words, >3 unresolved tokens, non-keyword mode
     const AMBIGUOUS_QUERY = 'find the document about the project planning meeting notes';
 
-    it('fires a second search with LLM-refined ParsedQuery when deterministic parse is insufficient', async () => {
+    it('fires one search with LLM-refined ParsedQuery when deterministic parse is insufficient', async () => {
       const llmParsed = {
         queryText: 'project planning meeting notes',
         mediaTypes: [],
@@ -222,20 +222,16 @@ describe('useSearch', () => {
         mode: 'hybrid' as const,
       };
       mockParseQueryLlm.mockResolvedValue(llmParsed);
-      // Phase 1 response, then phase 2 response
-      mockInvoke
-        .mockResolvedValueOnce(makeResponse([makeResult(1)], 1))
-        .mockResolvedValueOnce(makeResponse([makeResult(2)], 1));
+      mockInvoke.mockResolvedValue(makeResponse([makeResult(2)], 1));
 
       const { result } = renderHook(() => useSearch());
       await triggerSearch(result.current.setQuery, AMBIGUOUS_QUERY);
 
       expect(mockParseQueryLlm).toHaveBeenCalledWith(AMBIGUOUS_QUERY, 'hybrid');
-      // Second invoke call should use the LLM-refined queryText
-      const secondCall = mockInvoke.mock.calls[1];
-      expect((secondCall[1] as { query: { queryText: string } }).query.queryText)
+      const searchCalls = mockInvoke.mock.calls.filter((c) => c[0] === 'search');
+      expect(searchCalls).toHaveLength(1);
+      expect((searchCalls[0][1] as { query: { queryText: string } }).query.queryText)
         .toBe('project planning meeting notes');
-      // Final results come from the LLM-refined search
       expect(result.current.results[0]?.fileId).toBe(2);
     });
 
@@ -258,15 +254,18 @@ describe('useSearch', () => {
       expect(mockParseQueryLlm).not.toHaveBeenCalled();
     });
 
-    it('keeps phase-1 results if LLM call fails', async () => {
+    it('falls back to deterministic result silently when LLM call fails', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockParseQueryLlm.mockRejectedValue(new Error('ollama timeout'));
       mockInvoke.mockResolvedValue(makeResponse([makeResult(1)], 1));
 
       const { result } = renderHook(() => useSearch());
       await triggerSearch(result.current.setQuery, AMBIGUOUS_QUERY);
 
-      // Error from LLM path should surface
-      expect(result.current.error).toBeTruthy();
+      expect(result.current.error).toBeNull();
+      expect(result.current.results[0]?.fileId).toBe(1);
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
     });
   });
 });
