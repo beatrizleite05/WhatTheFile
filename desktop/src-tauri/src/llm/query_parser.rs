@@ -186,4 +186,15 @@ mod tests {
         let result = parse_query("find the meeting notes from last quarter", "http://127.0.0.1:19999");
         assert!(matches!(result, Err(AppError::Llm(_))));
     }
+
+    #[test]
+    fn media_types_matches_json_source() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let json_path = std::path::Path::new(manifest_dir).join("../src/core/mediaTypes.json");
+        let json = std::fs::read_to_string(&json_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", json_path.display()));
+        let from_json: Vec<String> = serde_json::from_str(&json).unwrap();
+        let from_const: Vec<String> = MEDIA_TYPES.iter().map(|s| s.to_string()).collect();
+        assert_eq!(from_const, from_json);
+    }
 }
