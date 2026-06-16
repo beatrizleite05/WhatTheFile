@@ -126,6 +126,24 @@ describe('useSearch', () => {
     expect(result.current.results[2].fileId).toBe(3);
   });
 
+  it('sends limit=PAGE_SIZE and advances offset by PAGE_SIZE on loadMore', async () => {
+    mockInvoke
+      .mockResolvedValueOnce(makeResponse([makeResult(1), makeResult(2)], 4))
+      .mockResolvedValueOnce({ ...makeResponse([makeResult(3)], 4), offset: 50 });
+
+    const { result } = renderHook(() => useSearch());
+    await triggerSearch(result.current.setQuery, 'reports');
+
+    const firstQuery = (mockInvoke.mock.calls[0][1] as { query: { limit: number; offset: number } }).query;
+    expect(firstQuery).toMatchObject({ limit: 50, offset: 0 });
+
+    await act(async () => { result.current.loadMore(); });
+    await act(async () => {});
+
+    const lastQuery = (mockInvoke.mock.calls.at(-1)![1] as { query: { limit: number; offset: number } }).query;
+    expect(lastQuery).toMatchObject({ limit: 50, offset: 50 });
+  });
+
   it('hasMore is false when all results are loaded', async () => {
     mockInvoke.mockResolvedValue(makeResponse([makeResult(1)], 1));
     const { result } = renderHook(() => useSearch());
